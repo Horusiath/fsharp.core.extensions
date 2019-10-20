@@ -1,0 +1,22 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "FSharp.Core.Extensions", "src\FSharp.Core.Extensions\FSharp.Core.Extensions.fsproj", "{DE3D9152-20B6-4676-ABDC-91648AF3B17C}"
+EndProject
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "FSharp.Core.Extensions.Tests", "tests\FSharp.Core.Extensions.Tests\FSharp.Core.Extensions.Tests.fsproj", "{9814F8A6-19FD-4A07-820D-7EAF37E5BB0F}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{DE3D9152-20B6-4676-ABDC-91648AF3B17C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DE3D9152-20B6-4676-ABDC-91648AF3B17C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DE3D9152-20B6-4676-ABDC-91648AF3B17C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DE3D9152-20B6-4676-ABDC-91648AF3B17C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9814F8A6-19FD-4A07-820D-7EAF37E5BB0F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9814F8A6-19FD-4A07-820D-7EAF37E5BB0F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9814F8A6-19FD-4A07-820D-7EAF37E5BB0F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9814F8A6-19FD-4A07-820D-7EAF37E5BB0F}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

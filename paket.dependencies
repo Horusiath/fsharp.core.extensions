@@ -1,0 +1,12 @@
+source https://www.nuget.org/api/v2
+
+framework: auto-detect
+nuget Expecto
+nuget FSharp.Core
+nuget System.Memory
+nuget System.ValueTuple
+
+group Build
+source https://www.nuget.org/api/v2
+
+nuget FAKE
