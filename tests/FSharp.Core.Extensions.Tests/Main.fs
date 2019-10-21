@@ -1,4 +1,4 @@
-module FSharp.Core.Extensions.Tests
+module FSharp.Core.Extensions.Tests.Program
 
 open Expecto
 
