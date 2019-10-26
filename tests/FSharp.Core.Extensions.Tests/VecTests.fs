@@ -87,4 +87,18 @@ let tests =
             let v = Vec.empty
             let value = v |> Vec.find ((=) 123)
             Expect.equal value ValueNone "Vec.find should not fail in empty case"
+            
+        testCase "should be able to append many elements" <| fun _ ->
+            let mutable v = Vec.empty
+            for i=0 to 1_000_000 do
+                v <- v |> Vec.append i
+            let expected = [|0..1_000_000|]
+            let actual = v |> Vec.toArray
+            Expect.equal actual expected "Vec.append should work for huge number of elements"
+            
+        testProperty "should be able to insert a range of elements at once" <| fun (a:int[], b:int[]) ->
+            let v = a |> Vec.ofArray
+            let expected = Array.append a b
+            let actual = Vec.concat v b |> Vec.toArray
+            Expect.equal actual expected "Vec.concat should be able to append many elements"            
     ]

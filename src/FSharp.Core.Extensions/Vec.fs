@@ -34,15 +34,15 @@ module internal VecConst =
     
     let inline tailoff count = if count < capacity then 0 else ((count - 1) >>> off) <<< off
     
+open System.Collections
+open System.Collections.Generic
+open System.Collections.Generic
 open VecConst
 
+//TODO: try change to struct with tagged union VenNode<'a>(tag:byte, (children:VecNode<'a>[] | values:'a[])) 
 type internal VecNode<'a> =
     | Leaf   of array:'a[]
     | Branch of children: VecNode<'a>[] 
-    member this.Copy() =
-        match this with
-        | Leaf array -> Leaf (array.Clone() :?> 'a[])
-        | Branch array -> Branch (array.Clone() :?> VecNode<'a>[])
     member this.Map(fn: 'a -> 'b) =
         let rec map fn node =
             match node with
@@ -93,9 +93,12 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
         let nodeToInsert =
             if level = off then tailNode
             else
-                let child = children.[subIdx]
-                if obj.ReferenceEquals(child, null) then appendTail (level-off) child tailNode
-                else pathFor (level-off) tailNode
+                try
+                    let child = children.[subIdx]
+                    if obj.ReferenceEquals(child, null) then pathFor (level-off) tailNode
+                    else appendTail (level-off) child tailNode
+                with e ->
+                    reraise()
         result.[subIdx] <- nodeToInsert
         Branch result
     
@@ -135,7 +138,7 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
                 | Branch array ->
                     node <- array.[(index >>> level) &&& mask]
                 | _ -> ()
-                level <- level - shift
+                level <- level - off
             let (Leaf array) = node
             array
     
@@ -157,7 +160,7 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
                     let arr = Array.zeroCreate capacity
                     arr.[0] <- root
                     arr.[1] <- pathFor shift tailNode
-                    shift' <- shift' + 5
+                    shift' <- shift' + off
                     Branch arr
                 else
                     appendTail shift root tailNode
@@ -364,7 +367,7 @@ module Vec =
     
     /// Returns vector element at provided index, or None if index is out of bound of a vector.
     [<CompiledName("ElementAt")>]
-    let nth (index: int) (v: Vec<_>): 'a voption = 
+    let item (index: int) (v: Vec<_>): 'a voption = 
         if index >= 0 && index < v.Count then
             ValueSome(v.ElementAt index)
         else ValueNone
@@ -372,8 +375,14 @@ module Vec =
     /// Concatenates two vectors, returning new vector with elements of vector `a` first, then elements of vector `b` second.
     /// Complexity: O(b.length) - requires copying elements of b.
     [<CompiledName("Concat")>]
-    let concat (a: Vec<_>) (b: Vec<_>): Vec<_> = failwith "not implemented"
+    let concat (a: Vec<'a>) (b: #IList<'a>): Vec<_> =
+        match b.Count with
+        | 0 -> a
+        | 1 -> append b.[0] a
+        | _ -> failwith "not implemented"
     
+    /// Traverses given vector `v` and returns an index of first element equal to a given `item`. Returns -1 if no
+    /// matching element was found or vector is empty. 
     [<CompiledName("IndexOf")>]
     let inline indexOf (item: 'a) (v: Vec<_>): int = v.IndexOf item
     

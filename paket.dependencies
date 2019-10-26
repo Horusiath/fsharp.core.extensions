@@ -6,6 +6,7 @@ nuget Expecto
 nuget Expecto.FsCheck
 nuget Expecto.VisualStudio.TestAdapter
 nuget FSharp.Core
+nuget FSharpx.Collections
 nuget System.Memory
 nuget System.ValueTuple
 
