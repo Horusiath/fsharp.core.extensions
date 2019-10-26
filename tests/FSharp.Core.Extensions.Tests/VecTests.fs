@@ -23,6 +23,9 @@ open FsCheck
 open Expecto
 open Expecto.ExpectoFsCheck
 
+[<NoEquality;NoComparison>]
+type Point = { x: int; y: int }
+
 [<Tests>]
 let tests =
     testList "Vec" [
@@ -52,7 +55,7 @@ let tests =
                 i <- i + 1
         
         testProperty "should be able to find a correct element by using indexOf" <| fun (NonEmptyArray a) ->
-            let v: Vec<int> = Vec.ofArray a
+            let v: Vec<Point> = Vec.ofArray a
             let expected = Random.between 0 a.Length
             let item = a.[expected]
             let actual = v |> Vec.indexOf item

@@ -26,6 +26,7 @@ NUGET
     Expecto.FsCheck (8.12)
       Expecto (>= 8.12)
       FsCheck (>= 2.13)
+    Expecto.VisualStudio.TestAdapter (10.0.2)
     FsCheck (2.14)
       FSharp.Core (>= 4.2.3)
     FSharp.Core (4.7)

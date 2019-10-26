@@ -27,7 +27,7 @@ module internal VecConst =
     let off = 5
     
     [<Literal>]
-    let capacity = 32 // 1 << shift
+    let capacity = 32 // 1 << off
     
     [<Literal>]
     let mask = 0x1f // capacity - 1
@@ -42,32 +42,32 @@ type internal VecNode<'a> =
     member this.Copy() =
         match this with
         | Leaf array -> Leaf (array.Clone() :?> 'a[])
-        | Branch array ->
-            let array' = array |> Array.map (fun i -> i.Copy())
-            Branch array'
+        | Branch array -> Branch (array.Clone() :?> VecNode<'a>[])
     
 [<IsByRefLike;Struct>]
 type VecEnumerator<'a>(vector: Vec<'a>) =
     [<DefaultValue(false)>]val mutable private array: 'a[]
+    [<DefaultValue(false)>]val mutable private current: 'a
     [<DefaultValue(false)>]val mutable private index: int
     [<DefaultValue(false)>]val mutable private offset: int
-    member e.Current = e.array.[e.index &&& mask]
+    member e.Current = e.current
     member e.MoveNext() =
         let i = e.index
         if i < vector.Count then
             if isNull e.array then e.array <- vector.FindArrayForIndex(i)
-            else
-                if i - e.offset = capacity then
-                    e.array <- vector.FindArrayForIndex(i)
-                    e.offset <- e.offset + capacity
-                e.index <- i + 1
+            elif i - e.offset = capacity then
+                e.array <- vector.FindArrayForIndex(i)
+                e.offset <- e.offset + capacity
+            e.current <- e.array.[e.index &&& mask]
+            e.index <- i + 1
             true
         else false
     interface IEnumerator<'a> with
-        member this.Current: 'a = this.Current
-        member this.Current: obj = upcast this.Current
+        member this.Current: 'a = this.current
+        member this.Current: obj = upcast this.current
         member this.Reset() =
             this.array <- null
+            this.current <- Unchecked.defaultof<_>
             this.index <- 0
         member __.Dispose() = ()
         member this.MoveNext(): bool = this.MoveNext()

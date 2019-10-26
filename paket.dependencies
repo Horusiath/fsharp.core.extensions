@@ -4,6 +4,7 @@ framework: netstandard2.0, netcoreapp3.0
 nuget BenchmarkDotNet
 nuget Expecto
 nuget Expecto.FsCheck
+nuget Expecto.VisualStudio.TestAdapter
 nuget FSharp.Core
 nuget System.Memory
 nuget System.ValueTuple
