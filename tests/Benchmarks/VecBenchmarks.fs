@@ -9,7 +9,7 @@ type User = { FirstName: string; LastName: string; Age: int }
 [<MemoryDiagnoser>]
 type VecAppendBenchmarks() =
 
-    [<DefaultValue; Params(1, 100, 1000, 200_000)>]
+    [<DefaultValue; Params(1, 100, 1000, 10_000)>]
     val mutable count: int
     
     [<DefaultValue>]

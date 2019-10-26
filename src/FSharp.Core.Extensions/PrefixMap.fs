@@ -15,7 +15,27 @@ limitations under the License.
 *)
 
 namespace FSharp.Core
+open System.Collections.Generic
 
-type PrefixMap<'a> = class end
+type PrefixMap<'a>() =
+    static member Empty: PrefixMap<'a> = Unchecked.defaultof<_>
 
+[<RequireQualifiedAccess>]
+module PrefixMap =
+    
+    let empty<'a> = PrefixMap<'a>.Empty
+    
+    let ofSeq (seq: seq<string * 'a>): PrefixMap<'a> = failwith "not implemented"
+    
+    let ofMap (map: #seq<KeyValuePair<string, 'a>>): PrefixMap<'a> = failwith "not implemented"
+    
+    let add (key: string) (value: 'a) (map: PrefixMap<'a>): PrefixMap<'a> = failwith "not implemented"
+    
+    let tryFind (key: string) (map: PrefixMap<'a>): 'a voption = failwith "not implemented"
+    
+    let prefixed (prefix: string) (map: PrefixMap<'a>) = failwith "not implemented"
+    
+    let map (fn: string -> 'a -> 'b) (map: PrefixMap<'a>) = failwith "not implemented"
+    
+    let filter (fn: string -> 'a -> bool) (map: PrefixMap<'a>) = failwith "not implemented"
     

@@ -21,7 +21,6 @@ module FSharp.Core.Extensions.Tests.Vec
 open FSharp.Core
 open FsCheck
 open Expecto
-open Expecto.ExpectoFsCheck
 
 [<NoEquality;NoComparison>]
 type Point = { x: int; y: int }

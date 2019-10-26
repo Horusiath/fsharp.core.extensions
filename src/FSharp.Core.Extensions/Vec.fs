@@ -43,13 +43,19 @@ type internal VecNode<'a> =
         match this with
         | Leaf array -> Leaf (array.Clone() :?> 'a[])
         | Branch array -> Branch (array.Clone() :?> VecNode<'a>[])
+    member this.Map(fn: 'a -> 'b) =
+        let rec map fn node =
+            match node with
+            | Leaf array -> Leaf (Array.map fn array)
+            | Branch children -> Branch (Array.map (map fn) children)
+        map fn this
     
 [<IsByRefLike;Struct>]
 type VecEnumerator<'a>(vector: Vec<'a>) =
     [<DefaultValue(false)>]val mutable private array: 'a[]
-    [<DefaultValue(false)>]val mutable private current: 'a
     [<DefaultValue(false)>]val mutable private index: int
     [<DefaultValue(false)>]val mutable private offset: int
+    [<DefaultValue(false)>]val mutable private current: 'a
     member e.Current = e.current
     member e.MoveNext() =
         let i = e.index
@@ -108,6 +114,13 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
             v
         else
             Vec<_>(count, off, emptyNode, Array.copy items)
+            
+    member this.Map(fn: 'a -> 'b): Vec<'b> =
+        if count = 0 then Vec<'b>.Empty()
+        else
+            let root' = root.Map fn
+            let tail' = tail |> Array.map fn
+            Vec<'b>(count, shift, root', tail')
             
     member __.Count: int = count
     member this.GetEnumerator(): VecEnumerator<_> = new VecEnumerator<_>(this)
@@ -274,7 +287,6 @@ type VecRangedEnumerator<'a> =
         member __.Dispose() = ()
         member this.MoveNext(): bool = this.MoveNext()
 
-
 [<RequireQualifiedAccess>]
 module Vec =
     
@@ -287,11 +299,19 @@ module Vec =
     
     /// Constructs current vector out of the given sequence of elements.
     [<CompiledName("OfEnumerable")>]
-    let inline ofSeq (items: 'a seq): Vec<'a> =
+    let ofSeq (items: 'a seq): Vec<'a> =
         let mutable vector = Vec<'a>.Empty()
         for item in items do
             vector <- vector.Append(item)
         vector
+        
+    /// Constructs current vector out of the given enumerator.
+    [<CompiledName("OfEnumerator")>]
+    let ofEnumerator (e: #IEnumerator<'a> byref): Vec<'a> =
+        let mutable vector = Vec<'a>.Empty()
+        while e.MoveNext() do
+            vector <- vector.Append(e.Current)
+        vector           
         
     /// Copies contents of current vector into new array and returns it.
     [<CompiledName("ToArray")>]
@@ -386,10 +406,15 @@ module Vec =
                 
     
     [<CompiledName("Map")>]
-    let map (f: 'a -> 'b) (v: Vec<_>): Vec<'b> = failwith "not implemented"
+    let inline map (f: 'a -> 'b) (v: Vec<_>): Vec<'b> = v.Map(f)
     
     [<CompiledName("MapWithIndex")>]
-    let mapi (f: int -> 'a -> 'b) (v: Vec<_>): Vec<'b> = failwith "not implemented"
+    let mapi (f: int -> 'a -> 'b) (v: Vec<_>): Vec<'b> =
+        let mutable i = 0
+        v.Map (fun item ->
+            let result = f i item
+            i <- i + 1
+            result)
     
     [<CompiledName("Filter")>]
     let filter (f: 'a -> bool) (v: Vec<_>): Vec<_> = failwith "not implemented"
