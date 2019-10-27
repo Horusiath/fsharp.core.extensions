@@ -1,5 +1,6 @@
 module FSharp.Core.Extensions.Tests.Program
 
+open System
 open Expecto
 
 [<EntryPoint>]

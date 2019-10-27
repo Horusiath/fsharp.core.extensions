@@ -52,6 +52,14 @@ let tests =
                 let item' = a.[i]
                 Expect.equal item item' (sprintf "vector iterator should work for element at position %i" i)
                 i <- i + 1
+                
+        testProperty "should be able to iterate over vector elements from the back" <| fun (a: int[]) ->
+            let v = Vec.ofArray a
+            let mutable i = a.Length - 1
+            for item in Vec.rev v do
+                let item' = a.[i]
+                Expect.equal item item' (sprintf "vector iterator should work for element at position %i" i)
+                i <- i - 1
         
         testProperty "should be able to find a correct element by using indexOf" <| fun (NonEmptyArray a) ->
             let v: Vec<Point> = Vec.ofArray a
@@ -96,9 +104,9 @@ let tests =
             let actual = v |> Vec.toArray
             Expect.equal actual expected "Vec.append should work for huge number of elements"
             
-        testProperty "should be able to insert a range of elements at once" <| fun (a:int[], b:int[]) ->
-            let v = a |> Vec.ofArray
-            let expected = Array.append a b
-            let actual = Vec.concat v b |> Vec.toArray
-            Expect.equal actual expected "Vec.concat should be able to append many elements"            
+//        testProperty "should be able to insert a range of elements at once" <| fun (a:int[], b:int[]) ->
+//            let v = a |> Vec.ofArray
+//            let expected = Array.append a b
+//            let actual = Vec.concat v b |> Vec.toArray
+//            Expect.equal actual expected "Vec.concat should be able to append many elements"            
     ]

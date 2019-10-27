@@ -17,6 +17,7 @@ limitations under the License.
 namespace FSharp.Core
 
 open System
+open System
 open System.Collections.Generic
 
 [<Sealed>]
@@ -51,6 +52,11 @@ module Random =
         
     /// Returns a random 32bit integer in [min, max) range. This is a thread safe operation.
     let between (min: int) (max: int): int = R.Current.Next(min, max)
+    
+    /// Returns a random TimeSpan fitting in between [min, max) range. This is a thread safe operation.
+    let time (min: TimeSpan) (max: TimeSpan): TimeSpan =
+        let value = abs (int64())
+        TimeSpan ((value + min.Ticks) % max.Ticks)
         
     /// Picks a random element from given list. This is a thread safe operation.
     let pick (items: #IReadOnlyList<_>) =

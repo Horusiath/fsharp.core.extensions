@@ -33,11 +33,6 @@ module internal VecConst =
     let mask = 0x1f // capacity - 1
     
     let inline tailoff count = if count < capacity then 0 else ((count - 1) >>> off) <<< off
-    
-open System.Collections
-open System.Collections.Generic
-open System.Collections.Generic
-open VecConst
 
 //TODO: try change to struct with tagged union VenNode<'a>(tag:byte, (children:VecNode<'a>[] | values:'a[])) 
 type internal VecNode<'a> =
@@ -61,10 +56,10 @@ type VecEnumerator<'a>(vector: Vec<'a>) =
         let i = e.index
         if i < vector.Count then
             if isNull e.array then e.array <- vector.FindArrayForIndex(i)
-            elif i - e.offset = capacity then
+            elif i - e.offset = VecConst.capacity then
                 e.array <- vector.FindArrayForIndex(i)
-                e.offset <- e.offset + capacity
-            e.current <- e.array.[e.index &&& mask]
+                e.offset <- e.offset + VecConst.capacity
+            e.current <- e.array.[e.index &&& VecConst.mask]
             e.index <- i + 1
             true
         else false
@@ -83,40 +78,40 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
     let rec pathFor level node =
         if level = 0 then node
         else
-            let result = Array.zeroCreate capacity
-            result.[0] <- pathFor (level - off) node
+            let result = Array.zeroCreate VecConst.capacity
+            result.[0] <- pathFor (level - VecConst.off) node
             Branch result
     
     let rec appendTail (level: int) (Branch children) (tailNode: VecNode<'a>) =
-        let subIdx = ((count - 1) >>> level) &&& mask            
+        let subIdx = ((count - 1) >>> level) &&& VecConst.mask            
         let result = Array.copy children
         let nodeToInsert =
-            if level = off then tailNode
+            if level = VecConst.off then tailNode
             else
                 try
                     let child = children.[subIdx]
-                    if obj.ReferenceEquals(child, null) then pathFor (level-off) tailNode
-                    else appendTail (level-off) child tailNode
+                    if obj.ReferenceEquals(child, null) then pathFor (level-VecConst.off) tailNode
+                    else appendTail (level-VecConst.off) child tailNode
                 with e ->
                     reraise()
         result.[subIdx] <- nodeToInsert
         Branch result
     
-    static let emptyNode: VecNode<'a> = Branch (Array.zeroCreate capacity)
-    static let empty = Vec<_>(0, off, emptyNode, [||])
+    static let emptyNode: VecNode<'a> = Branch (Array.zeroCreate VecConst.capacity)
+    static let empty = Vec<_>(0, VecConst.off, emptyNode, [||])
     
     [<MethodImpl(MethodImplOptions.AggressiveInlining)>]
     static member Empty(): Vec<'a> = empty
     
     static member From(items: 'a[]): Vec<'a> = 
         let count = Array.length items
-        if count > capacity then
+        if count > VecConst.capacity then
             let mutable v = empty
             for item in items do
                 v <- v.Append(item)
             v
         else
-            Vec<_>(count, off, emptyNode, Array.copy items)
+            Vec<_>(count, VecConst.off, emptyNode, Array.copy items)
             
     member this.Map(fn: 'a -> 'b): Vec<'b> =
         if count = 0 then Vec<'b>.Empty()
@@ -129,21 +124,21 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
     member this.GetEnumerator(): VecEnumerator<_> = new VecEnumerator<_>(this)
     
     member internal __.FindArrayForIndex(index: int): 'a[] =
-        if index >= tailoff count then tail
+        if index >= VecConst.tailoff count then tail
         else
             let mutable node = root
             let mutable level = shift
             while level > 0 do
                 match node with
                 | Branch array ->
-                    node <- array.[(index >>> level) &&& mask]
+                    node <- array.[(index >>> level) &&& VecConst.mask]
                 | _ -> ()
-                level <- level - off
+                level <- level - VecConst.off
             let (Leaf array) = node
             array
     
     member __.Append(value) =
-        if count - tailoff count < capacity
+        if count - VecConst.tailoff count < VecConst.capacity
         then
             let tail' = Array.zeroCreate (tail.Length + 1)
             tail.CopyTo(tail', 0)
@@ -154,13 +149,13 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
             let tailNode = Leaf tail
             let mutable shift' = shift
             let root' =
-                if (count >>> off) > (1 <<< shift)
+                if (count >>> VecConst.off) > (1 <<< shift)
                 then
                     // overflow root
-                    let arr = Array.zeroCreate capacity
+                    let arr = Array.zeroCreate VecConst.capacity
                     arr.[0] <- root
                     arr.[1] <- pathFor shift tailNode
-                    shift' <- shift' + off
+                    shift' <- shift' + VecConst.off
                     Branch arr
                 else
                     appendTail shift root tailNode
@@ -169,7 +164,7 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
     member this.ElementAt(index: int): 'a =
         if index >= 0 && index < count then
             let n = this.FindArrayForIndex index
-            n.[index &&& mask]
+            n.[index &&& VecConst.mask]
         else raise (IndexOutOfRangeException(sprintf "Index [%i] out of range of vector (size: %i)" index count))
         
     member inline this.Item with get index = this.ElementAt index
@@ -191,8 +186,8 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
         while offset < count do
             let src = this.FindArrayForIndex(offset)
             Array.Copy(src, 0, array, i, src.Length)
-            offset <- offset + capacity
-            i <- i + capacity
+            offset <- offset + VecConst.capacity
+            i <- i + VecConst.capacity
 
     interface IEquatable<Vec<'a>> with
         member this.Equals(other: Vec<_>): bool =
@@ -218,16 +213,16 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
                 member __.Reset() =
                     array <- null
                     index <- 0
-                member __.Current: 'a = array.[index &&& mask]
-                member __.Current: obj = upcast array.[index &&& mask]
+                member __.Current: 'a = array.[index &&& VecConst.mask]
+                member __.Current: obj = upcast array.[index &&& VecConst.mask]
                 member __.MoveNext() =
                     let i = index
                     if i < this.Count then
                         if isNull array then array <- this.FindArrayForIndex(i)
                         else
-                            if i - offset = capacity then
+                            if i - offset = VecConst.capacity then
                                 array <- this.FindArrayForIndex(i)
-                                offset <- offset + capacity
+                                offset <- offset + VecConst.capacity
                             index <- i + 1
                         true
                     else false }
@@ -266,17 +261,17 @@ type VecRangedEnumerator<'a> =
               stop = finish;
               start = start;
               index = start;
-              offset = (start - (start % capacity));
+              offset = (start - (start % VecConst.capacity));
               array = null }
-        member e.Current = e.array.[e.index &&& mask]
+        member e.Current = e.array.[e.index &&& VecConst.mask]
         member e.MoveNext() =
             let i = e.index
             if i < e.stop then
                 if isNull e.array then e.array <- e.vector.FindArrayForIndex(i)
                 else
-                    if i - e.offset = capacity then
+                    if i - e.offset = VecConst.capacity then
                         e.array <- e.vector.FindArrayForIndex(i)
-                        e.offset <- e.offset + capacity
+                        e.offset <- e.offset + VecConst.capacity
                     e.index <- i + 1
                 true
             else false
@@ -290,6 +285,39 @@ type VecRangedEnumerator<'a> =
         member __.Dispose() = ()
         member this.MoveNext(): bool = this.MoveNext()
 
+[<IsByRefLike;Struct>]
+type VecReverseEnumerator<'a> =
+    val mutable private vector: 'a vec
+    val mutable private array: 'a[]
+    val mutable private index: int
+    val mutable private offset: int
+    val mutable private current: 'a
+    new (v: Vec<_>) =
+        let start = v.Count - 1
+        { vector = v;
+          array = if start < 0 then null else v.FindArrayForIndex(start)
+          index = start;
+          offset = (start - (start % VecConst.capacity));
+          current = Unchecked.defaultof<_>; }
+    member this.Current = this.current
+    member this.MoveNext() =
+        if this.index < 0 then false
+        else
+            if this.index - this.offset = -1 then
+                this.offset <- this.offset - VecConst.capacity
+                this.array <- this.vector.FindArrayForIndex(this.index)
+            this.current <- this.array.[this.index &&& VecConst.mask]
+            this.index <- this.index - 1
+            true
+    interface IEnumerator<'a> with
+        member this.Current: 'a = this.current
+        member this.Current: obj = upcast this.current
+        member this.Reset() =
+            this.array <- null
+            this.current <- Unchecked.defaultof<_>
+        member __.Dispose() = ()
+        member this.MoveNext(): bool = this.MoveNext()
+       
 [<RequireQualifiedAccess>]
 module Vec =
     
@@ -381,20 +409,42 @@ module Vec =
         | 1 -> append b.[0] a
         | _ -> failwith "not implemented"
     
-    /// Traverses given vector `v` and returns an index of first element equal to a given `item`. Returns -1 if no
-    /// matching element was found or vector is empty. 
+    /// Traverses given vector `v` from its beginning and returns an index of first element equal to a given `item`.
+    /// Returns -1 if no matching element was found or vector is empty. A default generic equality comparer is used
+    /// for equality check. If custom equality comparer is necessary, use `Vec.exists` function instead.
     [<CompiledName("IndexOf")>]
     let inline indexOf (item: 'a) (v: Vec<_>): int = v.IndexOf item
     
+    /// Traverses given vector `v` starting from its end and returns an index of first element equal to a given `item`.
+    /// Returns -1 if no matching element was found or vector is empty. A default generic equality comparer is used
+    /// for equality check. If custom equality comparer is necessary, use `Vec.exists` function instead.
+    [<CompiledName("LastIndexOf")>]
+    let inline lastIndexOf (item: 'a) (v: Vec<_>): int = 
+        let eq = EqualityComparer<'a>.Default
+        let mutable e = new VecReverseEnumerator<'a>(v)
+        let mutable found = -1
+        let mutable i = v.Count - 1
+        while found = -1 && e.MoveNext() do
+            if eq.Equals(e.Current, item) then
+                found <- i
+            i <- i - 1
+        found 
+    
+    /// Verifies if provided `item` exists inside of a given vector `v`. A default generic equality comparer is used
+    /// for equality check. If custom equality comparer is necessary, use `Vec.exists` function instead.
     [<CompiledName("Contains")>]
     let inline contains (item: 'a) (v: Vec<_>): bool = v.IndexOf item <> -1
     
+    /// Iterates over the elements of a given vector `v` (starting from the begining of it),
+    /// applying a function `f` over each one of them.
     [<CompiledName("ForEach")>]
     let inline iter (f: 'a -> unit) (v: Vec<_>): unit =
         let mutable e = new VecEnumerator<'a>(v)
         while e.MoveNext() do
             f e.Current
             
+    /// Iterates over the elements of a given vector `v` (starting from the begining of it),
+    /// applying a function `f` over each one of them together with an index of that element inside of a vector.
     [<CompiledName("ForEach")>]
     let inline iteri (f: int -> 'a -> unit) (v: Vec<_>): unit =
         let mutable i = 0
@@ -403,6 +453,8 @@ module Vec =
             f i e.Current
             i <- i + 1
     
+    /// Tries to find a first element inside of a vector, for which a given predicate `fn` is true, and returns it.
+    /// If vector is empty or none of its elements satisfies given predicate, a ValueNone is returned.
     [<CompiledName("FirstOrDefault")>]
     let find (fn: 'a -> bool) (v: Vec<_>): 'a voption =
         let mutable e = new VecEnumerator<'a>(v)
@@ -413,7 +465,8 @@ module Vec =
                 found <- ValueSome c
         found
                 
-    
+    /// Iterates over elements of a vector `v` and applies a tranforming function `f` over each of them, returning a new
+    /// vector of modified values in the result.
     [<CompiledName("Map")>]
     let inline map (f: 'a -> 'b) (v: Vec<_>): Vec<'b> = v.Map(f)
     
@@ -428,6 +481,8 @@ module Vec =
     [<CompiledName("Filter")>]
     let filter (f: 'a -> bool) (v: Vec<_>): Vec<_> = failwith "not implemented"
     
+    /// Iterates over all elements of the vector (starting from its beginning), and checks if any of them satisfies
+    /// given predicate `fn`. Returns *false* if vector `v` is empty or none of its elements satisfies a predicate.
     [<CompiledName("Exists")>]
     let exists (fn: 'a -> bool) (v: Vec<_>): bool =
         let mutable e = new VecEnumerator<'a>(v)
@@ -435,6 +490,16 @@ module Vec =
         while not found && e.MoveNext() do
             found <- fn e.Current
         found
+        
+    /// Iterates over all elements of the vector (starting from its beginning), and checks if all of them satisfy
+    /// given predicate `fn`. Returns *true* if vector `v` is empty or all of its elements satisfy a predicate.
+    [<CompiledName("ForAll")>]
+    let forall (fn: 'a -> bool) (v: Vec<_>): bool =
+        let mutable e = new VecEnumerator<'a>(v)
+        let mutable result = true
+        while result && e.MoveNext() do
+            result <- fn e.Current
+        result
     
     [<CompiledName("Choose")>]
     let choose (f: 'a -> 'b option) (v: Vec<_>): Vec<'b> = failwith "not implemented"
@@ -442,6 +507,9 @@ module Vec =
     [<CompiledName("Slice")>]
     let slice (low: int) (high: int) (v: Vec<_>): VecRangedEnumerator<'a> = new VecRangedEnumerator<'a>(v, low, high)
     
+    /// Folds over all elements of a given vector `v` (starting from its beginning), continuously applying accumulating
+    /// function `f` over them to build incremental state from previous accumulation (using `init` value at the start)
+    /// and currently iterated element. Returns `init` if vector was empty.
     [<CompiledName("Fold")>]
     let fold (f: 'b -> 'a -> 'b) (init: 'b) (v: Vec<_>): 'b =
         let mutable e = new VecEnumerator<'a>(v) 
@@ -449,7 +517,21 @@ module Vec =
         while e.MoveNext() do
             state <- f state e.Current
         state
+        
+    /// Folds over all elements of a given vector `v` (starting from its end), continuously applying accumulating
+    /// function `f` over them to build incremental state from previous accumulation (using `init` value at the start)
+    /// and currently iterated element. Returns `init` if vector was empty.
+    [<CompiledName("FoldBack")>]
+    let foldBack (f: 'b -> 'a -> 'b) (init: 'b) (v: Vec<_>): 'b =
+        let mutable e = new VecReverseEnumerator<'a>(v) 
+        let mutable state = init
+        while e.MoveNext() do
+            state <- f state e.Current
+        state
 
+    /// Folds over all elements of a given vector `v` (starting from its beginning), continuously applying accumulating
+    /// function `f` over them to build incremental state from previous accumulation. Returns *ValueNone* if vector
+    /// was empty. See also: `Vec.fold`.
     [<CompiledName("Reduce")>]
     let reduce (f: 'a -> 'a -> 'a) (v: Vec<_>): 'a voption =
         let mutable e = new VecEnumerator<'a>(v)
@@ -458,4 +540,13 @@ module Vec =
             let mutable state = e.Current
             while e.MoveNext() do
                 state <- f state e.Current
-            ValueSome state 
+            ValueSome state
+    
+    [<Struct;IsReadOnly>]
+    type Reverser<'a>(vector: Vec<'a>) =
+        member __.GetEnumerator() = new VecReverseEnumerator<'a>(vector)
+    
+    /// Returns an enumerator-like struct, which allows to make iterate over the elements of a given vector `v`
+    /// in reverse direction (starting from end).
+    [<CompiledName("GetReverseEnumerator")>]       
+    let inline rev (v: Vec<'a>) = Reverser(v)
