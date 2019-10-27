@@ -1,12 +1,8 @@
 namespace Benchmarks
 
 open System.Collections.Immutable
-open System.Collections.Immutable
-open System.Collections.Immutable
 open BenchmarkDotNet.Attributes
 open FSharp.Core
-open FSharpx.Collections
-open FSharpx.Collections
 open FSharpx.Collections
 
 type User = { FirstName: string; LastName: string; Age: int }
