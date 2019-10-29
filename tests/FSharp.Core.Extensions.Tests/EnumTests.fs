@@ -27,7 +27,7 @@ open Expecto
 type Point = { x: int; y: int }
 
 let private disposableEnumerator (atom) =
-    { new System.Collections.Generic.IEnumerator<int> with
+    { new  System.Collections.Generic.IEnumerator<int> with
         member this.Current: int = 0
         member this.Current: obj = null
         member this.Reset() = ()

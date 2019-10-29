@@ -17,10 +17,23 @@ limitations under the License.
 namespace FSharp.Core
 
 open System
+open System
 open System.Collections.Generic
+open System.Numerics
 open System.Runtime.CompilerServices
 open System.Runtime.InteropServices
 
+//TODO: try change to struct with tagged union VenNode<'a>(tag:byte, (children:VecNode<'a>[] | values:'a[])) 
+type internal VecNode<'a> =
+    | Leaf   of array:'a[]
+    | Branch of children: VecNode<'a>[] 
+    member this.Map(fn: 'a -> 'b) =
+        let rec map fn node =
+            match node with
+            | Leaf array -> Leaf (Array.map fn array)
+            | Branch children -> Branch (Array.map (map fn) children)
+        map fn this
+        
 module internal VecConst =
     
     [<Literal>] 
@@ -33,20 +46,66 @@ module internal VecConst =
     let mask = 0x1f // capacity - 1
     
     let inline tailoff count = if count < capacity then 0 else ((count - 1) >>> off) <<< off
-
-//TODO: try change to struct with tagged union VenNode<'a>(tag:byte, (children:VecNode<'a>[] | values:'a[])) 
-type internal VecNode<'a> =
-    | Leaf   of array:'a[]
-    | Branch of children: VecNode<'a>[] 
-    member this.Map(fn: 'a -> 'b) =
-        let rec map fn node =
-            match node with
-            | Leaf array -> Leaf (Array.map fn array)
-            | Branch children -> Branch (Array.map (map fn) children)
-        map fn this
     
+    let rec pathFor level node =
+        if level = 0 then node
+        else
+            let result = Array.zeroCreate capacity
+            result.[0] <- pathFor (level - off) node
+            Branch result
+    
+    let rec appendTail count (level: int) (Branch children) (tailNode: VecNode<'a>) =
+        let subIdx = ((count - 1) >>> level) &&& mask            
+        let result = Array.copy children
+        let nodeToInsert =
+            if level = off then tailNode
+            else
+                try
+                    let child = children.[subIdx]
+                    if obj.ReferenceEquals(child, null) then pathFor (level-off) tailNode
+                    else appendTail count (level-off) child tailNode
+                with e ->
+                    reraise()
+        result.[subIdx] <- nodeToInsert
+        Branch result
+        
 [<IsByRefLike;Struct>]
-type VecEnumerator<'a>(vector: Vec<'a>) =
+type internal TransientVec<'a> =
+    val mutable count: int
+    val mutable shift: int
+    val mutable root: VecNode<'a>
+    val mutable tail: 'a[]
+    new (count: int, shift: int, root: VecNode<'a>, tail: 'a[]) =
+        { count = count; shift = shift; root = root; tail = tail }
+    member this.AsPersistent(): Vec<'a> =
+        let trimmedTail = Array.zeroCreate (this.count - VecConst.tailoff this.count)
+        Array.blit this.tail 0 trimmedTail 0 trimmedTail.Length
+        Vec<_>(this.count, this.shift, this.root, trimmedTail)
+    member this.Append(value) =
+        let i = this.count
+        if i - VecConst.tailoff this.count < 32 then
+            this.tail.[i &&& VecConst.mask] <- value
+            this.count <- this.count + 1
+        else
+            let mutable shift' = this.shift
+            let tailNode = Leaf this.tail
+            this.tail <- Array.zeroCreate VecConst.capacity
+            this.tail.[0] <- value
+            let root' =
+                if ((this.count >>> VecConst.off) > (1 <<< this.shift)) then
+                    let n = Array.zeroCreate VecConst.capacity
+                    n.[0] <- this.root
+                    n.[1] <- VecConst.pathFor this.shift tailNode
+                    shift' <- shift' + 5
+                    Branch n
+                else
+                    VecConst.appendTail this.count this.shift this.root tailNode
+            this.root <- root'
+            this.shift <- shift'
+            this.count <- this.count + 1
+    
+
+and [<IsByRefLike;Struct>] VecEnumerator<'a>(vector: Vec<'a>) =
     [<DefaultValue(false)>]val mutable private array: 'a[]
     [<DefaultValue(false)>]val mutable private index: int
     [<DefaultValue(false)>]val mutable private offset: int
@@ -74,42 +133,35 @@ type VecEnumerator<'a>(vector: Vec<'a>) =
         member this.MoveNext(): bool = this.MoveNext()
         
 and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail: 'a[]) =
-        
-    let rec pathFor level node =
-        if level = 0 then node
-        else
-            let result = Array.zeroCreate VecConst.capacity
-            result.[0] <- pathFor (level - VecConst.off) node
-            Branch result
-    
-    let rec appendTail (level: int) (Branch children) (tailNode: VecNode<'a>) =
-        let subIdx = ((count - 1) >>> level) &&& VecConst.mask            
-        let result = Array.copy children
-        let nodeToInsert =
-            if level = VecConst.off then tailNode
-            else
-                try
-                    let child = children.[subIdx]
-                    if obj.ReferenceEquals(child, null) then pathFor (level-VecConst.off) tailNode
-                    else appendTail (level-VecConst.off) child tailNode
-                with e ->
-                    reraise()
-        result.[subIdx] <- nodeToInsert
-        Branch result
-    
+            
     static let emptyNode: VecNode<'a> = Branch (Array.zeroCreate VecConst.capacity)
     static let empty = Vec<_>(0, VecConst.off, emptyNode, [||])
+    
+    let rec doAssoc level node i value (old: 'a outref) =
+        if level = 0 then
+            let (Leaf values) = node
+            let result = Array.copy values
+            old <- result.[i &&& VecConst.mask]
+            result.[i &&& VecConst.mask] <- value
+            Leaf result
+        else
+            let (Branch children) = node
+            let result = Array.copy children
+            let subidx = (i >>> shift) &&& VecConst.mask
+            result.[subidx] <- doAssoc (level-5) children.[subidx] i value &old
+            Branch result
     
     [<MethodImpl(MethodImplOptions.AggressiveInlining)>]
     static member Empty(): Vec<'a> = empty
     
     static member From(items: 'a[]): Vec<'a> = 
         let count = Array.length items
-        if count > VecConst.capacity then
-            let mutable v = empty
+        if count = 0 then empty
+        elif count > VecConst.capacity then
+            let mutable v = empty.AsTransient()
             for item in items do
-                v <- v.Append(item)
-            v
+                v.Append(item)
+            v.AsPersistent()
         else
             Vec<_>(count, VecConst.off, emptyNode, Array.copy items)
             
@@ -154,12 +206,24 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
                     // overflow root
                     let arr = Array.zeroCreate VecConst.capacity
                     arr.[0] <- root
-                    arr.[1] <- pathFor shift tailNode
+                    arr.[1] <- VecConst.pathFor shift tailNode
                     shift' <- shift' + VecConst.off
                     Branch arr
                 else
-                    appendTail shift root tailNode
+                    VecConst.appendTail count shift root tailNode
             Vec<_>(count + 1, shift', root', [| value |])
+           
+    member this.Replace(index: int, value: 'a, old: 'a outref): Vec<'a> =
+        if index < 0 || index >= count then raise (IndexOutOfRangeException (sprintf "Tried to insert value at index %i in vector of size %i" index count))
+        elif index >= VecConst.tailoff count then
+            let tail' = Array.zeroCreate tail.Length
+            Array.blit tail 0 tail' 0 tail.Length
+            old <- tail'.[index &&& VecConst.mask]
+            tail'.[index &&& VecConst.mask] <- old
+            Vec<_>(count, shift, root, tail')
+        else
+            let root' = doAssoc shift root index value &old
+            Vec<_>(count, shift, root', tail)
             
     member this.ElementAt(index: int): 'a =
         if index >= 0 && index < count then
@@ -188,6 +252,12 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
             Array.Copy(src, 0, array, i, src.Length)
             offset <- offset + VecConst.capacity
             i <- i + VecConst.capacity
+            
+    member internal this.AsTransient(): TransientVec<'a> =
+        let (Branch children) = root
+        let tail' = Array.zeroCreate VecConst.capacity
+        Array.blit tail 0 tail' 0 tail.Length
+        TransientVec<_>(count, shift, Branch (Array.copy children), tail')
 
     interface IEquatable<Vec<'a>> with
         member this.Equals(other: Vec<_>): bool =
@@ -381,7 +451,7 @@ module Vec =
     
     /// Replaces element an given `index` with provided `item`. Returns an updated vector and replaced element.
     [<CompiledName("Update")>]
-    let replace (index: int) (item: 'a) (v: Vec<_>) : (Vec<_> * 'a) = failwith "not implemented"
+    let inline replace (index: int) (item: 'a) (v: Vec<_>) : (Vec<_> * 'a) = v.Replace(index, item)
     
     /// Returns first element of a vector or None if vector is empty.
     /// Complexity: O(log32(n)).
@@ -479,7 +549,14 @@ module Vec =
             result)
     
     [<CompiledName("Filter")>]
-    let filter (f: 'a -> bool) (v: Vec<_>): Vec<_> = failwith "not implemented"
+    let filter (f: 'a -> bool) (v: Vec<_>): Vec<_> =
+        //TODO: optimize path, where all elements have satisfied the predicate
+        let mutable t = empty.AsTransient()
+        for item in v do
+            if f item then
+                t.Append item
+        t.AsPersistent()
+            
     
     /// Iterates over all elements of the vector (starting from its beginning), and checks if any of them satisfies
     /// given predicate `fn`. Returns *false* if vector `v` is empty or none of its elements satisfies a predicate.
@@ -502,8 +579,14 @@ module Vec =
         result
     
     [<CompiledName("Choose")>]
-    let choose (f: 'a -> 'b option) (v: Vec<_>): Vec<'b> = failwith "not implemented"
-    
+    let choose (f: 'a -> 'b option) (v: Vec<_>): Vec<'b> =
+        let t = empty.AsTransient()
+        for item in v do
+            match f item with
+            | None -> ()
+            | Some m -> t.Append m
+        t.AsPersistent()
+            
     [<CompiledName("Slice")>]
     let slice (low: int) (high: int) (v: Vec<_>): VecRangedEnumerator<'a> = new VecRangedEnumerator<'a>(v, low, high)
     
