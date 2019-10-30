@@ -17,13 +17,12 @@ limitations under the License.
 namespace FSharp.Core
 
 open System
-open System
 open System.Collections.Generic
 open System.Numerics
 open System.Runtime.CompilerServices
 open System.Runtime.InteropServices
 
-//TODO: try change to struct with tagged union VenNode<'a>(tag:byte, (children:VecNode<'a>[] | values:'a[])) 
+//TODO: try change to struct with tagged union VenNode<'a>(tag:byte, (children:VecNode<'a>[] | values:'a[]))
 type internal VecNode<'a> =
     | Leaf   of array:'a[]
     | Branch of children: VecNode<'a>[] 
@@ -136,6 +135,26 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
             
     static let emptyNode: VecNode<'a> = Branch (Array.zeroCreate VecConst.capacity)
     static let empty = Vec<_>(0, VecConst.off, emptyNode, [||])
+    
+    let rec popTail level (node) (removed: 'a outref) =
+        let subidx = ((count-2) >>> level) &&& VecConst.mask
+        if level > 5 then
+            let (Branch children) = node
+            let child' = popTail (level-5) children.[subidx] &removed
+            if obj.ReferenceEquals(child', Unchecked.defaultof<_>) && subidx = 0
+            then Unchecked.defaultof<_>
+            else
+                let result = Array.copy children
+                result.[subidx] <- child'
+                Branch result
+        elif subidx = 0 then Unchecked.defaultof<_>
+        else
+            let (Leaf children) = node
+            let result = Array.copy children
+            removed <- children.[subidx]
+            result.[subidx] <- Unchecked.defaultof<_>
+            Leaf result
+            
     
     let rec doAssoc level node i value (old: 'a outref) =
         if level = 0 then
@@ -252,6 +271,32 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
             Array.Copy(src, 0, array, i, src.Length)
             offset <- offset + VecConst.capacity
             i <- i + VecConst.capacity
+            
+    member this.Pop(removed: 'a outref): Vec<'a> =
+        match count with
+        | 0 -> raise (InvalidOperationException "Cannot pop an empty vector")
+        | 1 ->
+            removed <- tail.[0]
+            empty
+        | i when i - VecConst.tailoff i > 1 ->
+            removed <- tail.[tail.Length-1]
+            let tail' = Array.zeroCreate (tail.Length-1)
+            Array.blit tail 0 tail' 0 tail'.Length
+            Vec<_>(i-1, shift, root, tail')
+        | _ ->
+            let tail' = this.FindArrayForIndex(count-2)
+            let r = popTail shift root &removed
+            let children' =
+                match r with
+                | Branch c -> c
+                | _ -> Array.zeroCreate VecConst.capacity
+            let mutable shift' = shift
+            let root' =
+                if shift > 5 && obj.ReferenceEquals(children'.[1], Unchecked.defaultof<_>) then
+                    shift' <- shift' - 5
+                    children'.[0]
+                else Branch children'
+            Vec<_>(count-1, shift', root', tail')
             
     member internal this.AsTransient(): TransientVec<'a> =
         let (Branch children) = root
@@ -452,6 +497,10 @@ module Vec =
     /// Replaces element an given `index` with provided `item`. Returns an updated vector and replaced element.
     [<CompiledName("Update")>]
     let inline replace (index: int) (item: 'a) (v: Vec<_>) : (Vec<_> * 'a) = v.Replace(index, item)
+    
+    /// Removes the last element of the vector `v` and returns an updated vector together with removed element.
+    [<CompiledName("Pop")>]
+    let inline pop (v: Vec<_>): (Vec<_> * 'a) = v.Pop()
     
     /// Returns first element of a vector or None if vector is empty.
     /// Complexity: O(log32(n)).

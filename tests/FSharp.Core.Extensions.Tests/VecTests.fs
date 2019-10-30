@@ -22,8 +22,10 @@ open FSharp.Core
 open FsCheck
 open Expecto
 
-[<NoEquality;NoComparison>]
-type Point = { x: int; y: int }
+[<CustomEquality;NoComparison>]
+type Point =
+    { x: int; y: int }
+    override this.Equals(other) = obj.ReferenceEquals(this, other)
 
 [<Tests>]
 let tests =
@@ -112,6 +114,14 @@ let tests =
             Expect.equal actualOld expectedOld "Vec.replace should return an old value"
             Expect.equal v.[i] expectedOld "Vec.replace should not change old vector"
             Expect.equal v'.[i] value "Vec.replace should return a new vector with updated value"
+            
+        testProperty "should be able to pop elements" <| fun (NonEmptyArray a) ->
+            let last = a.[a.Length-1]
+            let v: Point vec = a |> Vec.ofArray
+            let (v', removed) = Vec.pop v
+            Expect.equal removed last "Vec.pop should return removed element"
+            Expect.equal removed v.[v.Count-1] "Vec.pop should remove last element"
+            Expect.isFalse (Vec.contains removed v') "Vec.pop should return a vector with the last value removed"
             
 //        testProperty "should be able to insert a range of elements at once" <| fun (a:int[], b:int[]) ->
 //            let v = a |> Vec.ofArray
