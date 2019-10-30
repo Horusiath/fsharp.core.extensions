@@ -104,6 +104,15 @@ let tests =
             let actual = v |> Vec.toArray
             Expect.equal actual expected "Vec.append should work for huge number of elements"
             
+        testProperty "should be able to replace elements" <| fun (NonEmptyArray a, n: uint16, value: int) ->
+            let i = (int n) % a.Length
+            let v = a |> Vec.ofArray
+            let expectedOld = a.[i]
+            let (v', actualOld) = v |> Vec.replace i value
+            Expect.equal actualOld expectedOld "Vec.replace should return an old value"
+            Expect.equal v.[i] expectedOld "Vec.replace should not change old vector"
+            Expect.equal v'.[i] value "Vec.replace should return a new vector with updated value"
+            
 //        testProperty "should be able to insert a range of elements at once" <| fun (a:int[], b:int[]) ->
 //            let v = a |> Vec.ofArray
 //            let expected = Array.append a b

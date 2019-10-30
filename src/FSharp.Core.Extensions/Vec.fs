@@ -219,7 +219,7 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
             let tail' = Array.zeroCreate tail.Length
             Array.blit tail 0 tail' 0 tail.Length
             old <- tail'.[index &&& VecConst.mask]
-            tail'.[index &&& VecConst.mask] <- old
+            tail'.[index &&& VecConst.mask] <- value
             Vec<_>(count, shift, root, tail')
         else
             let root' = doAssoc shift root index value &old
