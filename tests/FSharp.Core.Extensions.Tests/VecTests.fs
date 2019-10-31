@@ -101,7 +101,7 @@ let tests =
         testCase "should be able to append many elements" <| fun _ ->
             let mutable v = Vec.empty
             for i=0 to 1_000_000 do
-                v <- v |> Vec.append i
+                v <- v |> Vec.add i
             let expected = [|0..1_000_000|]
             let actual = v |> Vec.toArray
             Expect.equal actual expected "Vec.append should work for huge number of elements"
@@ -123,9 +123,9 @@ let tests =
             Expect.equal removed v.[v.Count-1] "Vec.pop should remove last element"
             Expect.isFalse (Vec.contains removed v') "Vec.pop should return a vector with the last value removed"
             
-//        testProperty "should be able to insert a range of elements at once" <| fun (a:int[], b:int[]) ->
-//            let v = a |> Vec.ofArray
-//            let expected = Array.append a b
-//            let actual = Vec.concat v b |> Vec.toArray
-//            Expect.equal actual expected "Vec.concat should be able to append many elements"            
+        ftestProperty "should be able to append many elements at once" <| fun (a:int[], b:int[]) ->
+            let v = a |> Vec.ofArray
+            let expected = Array.append a b
+            let actual = Vec.append v b |> Vec.toArray
+            Expect.equal actual expected "Vec.append should be able to append many elements"            
     ]

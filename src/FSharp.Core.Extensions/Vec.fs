@@ -80,7 +80,7 @@ type internal TransientVec<'a> =
         let trimmedTail = Array.zeroCreate (this.count - VecConst.tailoff this.count)
         Array.blit this.tail 0 trimmedTail 0 trimmedTail.Length
         Vec<_>(this.count, this.shift, this.root, trimmedTail)
-    member this.Append(value) =
+    member this.Add(value) =
         let i = this.count
         if i - VecConst.tailoff this.count < 32 then
             this.tail.[i &&& VecConst.mask] <- value
@@ -179,7 +179,7 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
         elif count > VecConst.capacity then
             let mutable v = empty.AsTransient()
             for item in items do
-                v.Append(item)
+                v.Add(item)
             v.AsPersistent()
         else
             Vec<_>(count, VecConst.off, emptyNode, Array.copy items)
@@ -208,7 +208,7 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
             let (Leaf array) = node
             array
     
-    member __.Append(value) =
+    member __.Add(value) =
         if count - VecConst.tailoff count < VecConst.capacity
         then
             let tail' = Array.zeroCreate (tail.Length + 1)
@@ -448,7 +448,7 @@ module Vec =
     let ofSeq (items: 'a seq): Vec<'a> =
         let mutable vector = Vec<'a>.Empty()
         for item in items do
-            vector <- vector.Append(item)
+            vector <- vector.Add(item)
         vector
         
     /// Constructs current vector out of the given enumerator.
@@ -456,8 +456,17 @@ module Vec =
     let ofEnumerator (e: #IEnumerator<'a> byref): Vec<'a> =
         let mutable vector = Vec<'a>.Empty()
         while e.MoveNext() do
-            vector <- vector.Append(e.Current)
-        vector           
+            vector <- vector.Add(e.Current)
+        vector
+        
+    /// Creates a new vector of given `size` filled with elements generated from provided function `fn`,
+    /// which takes an index (0-based) from which an element will be created.
+    [<CompiledName("Init")>]
+    let init (size: int) (fn: int -> 'a): Vec<'a> =
+        let t = empty.AsTransient()
+        for i = 0 to size - 1 do
+            t.Add (fn i)
+        t.AsPersistent()
         
     /// Copies contents of current vector into new array and returns it.
     [<CompiledName("ToArray")>]
@@ -477,23 +486,22 @@ module Vec =
     
     /// Inserts an element at the end of vector, returning new vector in the result.
     /// Complexity: O(log32(n)) - most of the time it's close to O(1).
+    [<CompiledName("Add")>]
+    let inline add (item: 'a) (v: Vec<_>) : Vec<_> = v.Add(item)
+    
+    /// Inserts a collection of elements at the end of vector, returning new vector in the result.
+    /// Complexity: O(m * log32(n)) - most of the time it's close to O(m), where m is the number of items to insert.
     [<CompiledName("Append")>]
-    let inline append (item: 'a) (v: Vec<_>) : Vec<_> = v.Append(item)
-    
-    /// Inserts an element at the beginning of the vector, returning new vector in the result.
-    /// Complexity: O(n) - requires copying entire vector.
-    [<CompiledName("Prepend")>]
-    let prepend (item: 'a) (v: Vec<_>) : Vec<_> = failwith "not implemented"
-    
-    /// Inserts an element at the given position of the vector, returning new vector in the result.
-    /// Complexity: O(m + log32(n-m)) where i is the number of elements after given index.
-    /// The closer to the end of the vector, the less expensive it is.
-    [<CompiledName("Insert")>]
-    let insert (index: int) (item: 'a) (v: Vec<_>) : Vec<_> = failwith "not implemented"
-
-    [<CompiledName("InsertRange")>]
-    let insertRange (index: int) (items: #seq<'a>) (v: Vec<_>) : Vec<_> = failwith "not implemented"
-    
+    let append (v: Vec<'a>) (items: #seq<'a>): Vec<'a> =
+        //TODO: optimize
+        use e = items.GetEnumerator()
+        if not (e.MoveNext()) then v
+        else
+            let mutable t = v.AsTransient()
+            t.Add e.Current
+            while e.MoveNext() do t.Add e.Current
+            t.AsPersistent()
+        
     /// Replaces element an given `index` with provided `item`. Returns an updated vector and replaced element.
     [<CompiledName("Update")>]
     let inline replace (index: int) (item: 'a) (v: Vec<_>) : (Vec<_> * 'a) = v.Replace(index, item)
@@ -501,6 +509,10 @@ module Vec =
     /// Removes the last element of the vector `v` and returns an updated vector together with removed element.
     [<CompiledName("Pop")>]
     let inline pop (v: Vec<_>): (Vec<_> * 'a) = v.Pop()
+    
+    /// Returns a new vector with all elements of the provided vector `v` except the last one.
+    [<CompiledName("Initial")>]
+    let inline initial (v: Vec<_>): Vec<_> = v.Pop() |> fst
     
     /// Returns first element of a vector or None if vector is empty.
     /// Complexity: O(log32(n)).
@@ -518,16 +530,7 @@ module Vec =
         if index >= 0 && index < v.Count then
             ValueSome(v.ElementAt index)
         else ValueNone
-    
-    /// Concatenates two vectors, returning new vector with elements of vector `a` first, then elements of vector `b` second.
-    /// Complexity: O(b.length) - requires copying elements of b.
-    [<CompiledName("Concat")>]
-    let concat (a: Vec<'a>) (b: #IList<'a>): Vec<_> =
-        match b.Count with
-        | 0 -> a
-        | 1 -> append b.[0] a
-        | _ -> failwith "not implemented"
-    
+        
     /// Traverses given vector `v` from its beginning and returns an index of first element equal to a given `item`.
     /// Returns -1 if no matching element was found or vector is empty. A default generic equality comparer is used
     /// for equality check. If custom equality comparer is necessary, use `Vec.exists` function instead.
@@ -603,7 +606,7 @@ module Vec =
         let mutable t = empty.AsTransient()
         for item in v do
             if f item then
-                t.Append item
+                t.Add item
         t.AsPersistent()
             
     
@@ -633,7 +636,7 @@ module Vec =
         for item in v do
             match f item with
             | None -> ()
-            | Some m -> t.Append m
+            | Some m -> t.Add m
         t.AsPersistent()
             
     [<CompiledName("Slice")>]

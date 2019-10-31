@@ -59,7 +59,7 @@ type VecAppendBenchmarks() =
     member this.VecAppend() =
         let mutable array = Vec.empty
         for item in this.items do
-            array <- Vec.append item array
+            array <- Vec.add item array
         array
 
 [<MemoryDiagnoser>]
@@ -130,53 +130,24 @@ type VecEnumeratorBenchmarks() =
         last
     
 [<MemoryDiagnoser>]
-type VecInsertBenchmarks() =
+type VecOfArrayBenchmarks() =
 
-    [<DefaultValue; Params(1, 100, 1000, 200_000)>]
-    val mutable count: int
-    
     [<DefaultValue>]
     val mutable items: User[]
 
     [<GlobalSetup>]
     member this.Setup() =
-        this.items <- Array.zeroCreate this.count
-        for i=0 to this.count - 1 do
+        this.items <- Array.zeroCreate 1000
+        for i=0 to 999 do
             let s = string i
             this.items.[i] <- { FirstName = "Alex" + s; LastName = "McCragh" + s; Age = i }
         
     [<GlobalCleanup>]
     member this.Cleanup() =
         this.items <- null
-
-    [<Benchmark(Baseline=true)>]
-    member this.MutableListInsert() =
-        let list = ResizeArray()
-        for item in this.items do
-            let i = list.Count / 2
-            list.Insert(i, item)
-        list
         
-    [<Benchmark>]
-    member this.ImmutableListInsert() =
-        let mutable list = ImmutableList.Empty
-        for item in this.items do
-            let i = list.Count / 2
-            list <- list.Insert(i, item)
-        list
-        
-    [<Benchmark>]
-    member this.ImmutableArrayInsert() =
-        let mutable array = ImmutableArray.Empty
-        for item in this.items do
-            let i = array.Length / 2
-            array <- array.Insert(i, item)
-        array
-        
-    [<Benchmark>]
-    member this.VecInsert() =
-        let mutable array = Vec.empty
-        for item in this.items do
-            let i = array.Count / 2
-            array <- Vec.insert i item array
-        array
+    [<Benchmark>] member this.ResizeArrayOfArray() = ResizeArray<_>(this.items)
+    [<Benchmark>] member this.ImmutableListOfArray() = ImmutableList.Create<User>(this.items)
+    [<Benchmark>] member this.FSharpListOfArray() = List.ofArray this.items
+    [<Benchmark>] member this.FSharpxVecOfArray() = PersistentVector.ofSeq this.items
+    [<Benchmark>] member this.VecOfArray() = Vec.ofArray this.items
