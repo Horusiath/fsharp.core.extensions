@@ -17,12 +17,15 @@ limitations under the License.
 namespace FSharp.Core
 
 open System
+open System.Buffers
+open System.Buffers
 open System.Collections.Generic
 open System.Numerics
 open System.Runtime.CompilerServices
 open System.Runtime.InteropServices
 
 //TODO: try change to struct with tagged union VenNode<'a>(tag:byte, (children:VecNode<'a>[] | values:'a[]))
+[<NoEquality;NoComparison>]
 type internal VecNode<'a> =
     | Leaf   of array:'a[]
     | Branch of children: VecNode<'a>[] 
@@ -69,14 +72,14 @@ module internal VecConst =
         Branch result
         
 [<IsByRefLike;Struct>]
-type internal TransientVec<'a> =
+type internal VecBuilder<'a> =
     val mutable count: int
     val mutable shift: int
     val mutable root: VecNode<'a>
     val mutable tail: 'a[]
     new (count: int, shift: int, root: VecNode<'a>, tail: 'a[]) =
         { count = count; shift = shift; root = root; tail = tail }
-    member this.AsPersistent(): Vec<'a> =
+    member this.ToImmutable(): Vec<'a> =
         let trimmedTail = Array.zeroCreate (this.count - VecConst.tailoff this.count)
         Array.blit this.tail 0 trimmedTail 0 trimmedTail.Length
         Vec<_>(this.count, this.shift, this.root, trimmedTail)
@@ -131,6 +134,9 @@ and [<IsByRefLike;Struct>] VecEnumerator<'a>(vector: Vec<'a>) =
         member __.Dispose() = ()
         member this.MoveNext(): bool = this.MoveNext()
         
+and [<Sealed>] VecReadOnlySequenceSegment<'a>(parent: Vec<'a>, chunk: 'a[]) =
+    inherit ReadOnlySequenceSegment<'a>()
+        
 and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail: 'a[]) =
             
     static let emptyNode: VecNode<'a> = Branch (Array.zeroCreate VecConst.capacity)
@@ -147,7 +153,9 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
                 let result = Array.copy children
                 result.[subidx] <- child'
                 Branch result
-        elif subidx = 0 then Unchecked.defaultof<_>
+        elif subidx = 0 then
+            removed <- tail.[0]
+            Unchecked.defaultof<_>
         else
             let (Leaf children) = node
             let result = Array.copy children
@@ -177,10 +185,10 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
         let count = Array.length items
         if count = 0 then empty
         elif count > VecConst.capacity then
-            let mutable v = empty.AsTransient()
+            let mutable v = empty.AsBuilder()
             for item in items do
                 v.Add(item)
-            v.AsPersistent()
+            v.ToImmutable()
         else
             Vec<_>(count, VecConst.off, emptyNode, Array.copy items)
             
@@ -190,6 +198,11 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
             let root' = root.Map fn
             let tail' = tail |> Array.map fn
             Vec<'b>(count, shift, root', tail')
+            
+    member this.AsReadOnlySequence(): ReadOnlySequence<'a> =
+        let first = this.FindArrayForIndex(0)
+        let last = this.FindArrayForIndex(count - 1)
+        ReadOnlySequence<'a>(VecReadOnlySequenceSegment(this, first), 0, VecReadOnlySequenceSegment(this, last), count)
             
     member __.Count: int = count
     member this.GetEnumerator(): VecEnumerator<_> = new VecEnumerator<_>(this)
@@ -298,25 +311,73 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
                 else Branch children'
             Vec<_>(count-1, shift', root', tail')
             
-    member internal this.AsTransient(): TransientVec<'a> =
+    member internal this.AsBuilder(): VecBuilder<'a> =
         let (Branch children) = root
         let tail' = Array.zeroCreate VecConst.capacity
         Array.blit tail 0 tail' 0 tail.Length
-        TransientVec<_>(count, shift, Branch (Array.copy children), tail')
-
-    interface IEquatable<Vec<'a>> with
-        member this.Equals(other: Vec<_>): bool =
-            if obj.ReferenceEquals(other, null) then false
-            elif obj.ReferenceEquals(this, other) then false
-            elif count <> other.Count then false
+        VecBuilder<_>(count, shift, Branch (Array.copy children), tail')
+        
+    member this.Equals(other: Vec<_>): bool =
+        if obj.ReferenceEquals(other, null) then false
+        elif obj.ReferenceEquals(this, other) then false
+        elif count <> other.Count then false
+        else
+            let eq = EqualityComparer<'a>.Default
+            let mutable e1 = new VecEnumerator<_>(this)
+            let mutable e2 = new VecEnumerator<_>(other)
+            let mutable result = false
+            while not result && e1.MoveNext() && e2.MoveNext() do
+                result <- eq.Equals(e1.Current, e2.Current)
+            result
+        
+    override this.Equals(other: obj): bool =
+        match other with
+        | :? Vec<'a> as v -> this.Equals(v)
+        | _ -> false
+        
+    override this.GetHashCode(): int =
+        if count = 0 then 0
+        else
+            let eq = EqualityComparer<'a>.Default
+            let mutable hash = 0
+            let mutable e1 = new VecEnumerator<_>(this)
+            while e1.MoveNext() do
+                hash <- (hash * 397) + eq.GetHashCode(e1.Current)
+            hash
+            
+    override this.ToString() =
+        if count = 0 then "vec[]"
+        else
+            let sb = System.Text.StringBuilder("vec[")
+            let mutable e1 = new VecEnumerator<_>(this)
+            if e1.MoveNext() then
+                sb.Append(e1.Current) |> ignore
+            while e1.MoveNext() do
+                sb.Append("; ").Append(e1.Current) |> ignore
+            sb.Append(']').ToString()
+        
+    member this.CompareTo(other: Vec<_>): int =
+        let eq = Comparer<'a>.Default
+        let mutable e1 = new VecEnumerator<_>(this)
+        let mutable e2 = new VecEnumerator<_>(other)
+        let mutable result = 0
+        let mutable ok = true
+        while ok && result = 0 do
+            if e1.MoveNext() then
+                if e2.MoveNext() then
+                    result <- eq.Compare(e1.Current, e2.Current)
+                else
+                    ok <- false
+            elif e2.MoveNext() then
+                ok <- false
+                result <- eq.Compare(Unchecked.defaultof<_>, e2.Current)
             else
-                let eq = EqualityComparer<'a>.Default
-                let mutable e1 = new VecEnumerator<_>(this)
-                let mutable e2 = new VecEnumerator<_>(other)
-                let mutable result = false
-                while not result && e1.MoveNext() && e2.MoveNext() do
-                    result <- eq.Equals(e1.Current, e2.Current)
-                result
+                ok <- false
+                result <- eq.Compare(e1.Current, Unchecked.defaultof<_>)
+        result
+            
+    interface IEquatable<Vec<'a>> with member this.Equals(other: Vec<_>): bool = this.Equals(other)                
+    interface IComparable<Vec<'a>> with member this.CompareTo(other: Vec<_>): int = this.CompareTo(other)
                 
     interface IEnumerable<'a> with
         member this.GetEnumerator(): IEnumerator<'a> = 
@@ -463,10 +524,10 @@ module Vec =
     /// which takes an index (0-based) from which an element will be created.
     [<CompiledName("Init")>]
     let init (size: int) (fn: int -> 'a): Vec<'a> =
-        let t = empty.AsTransient()
+        let t = empty.AsBuilder()
         for i = 0 to size - 1 do
             t.Add (fn i)
-        t.AsPersistent()
+        t.ToImmutable()
         
     /// Copies contents of current vector into new array and returns it.
     [<CompiledName("ToArray")>]
@@ -497,10 +558,10 @@ module Vec =
         use e = items.GetEnumerator()
         if not (e.MoveNext()) then v
         else
-            let mutable t = v.AsTransient()
+            let mutable t = v.AsBuilder()
             t.Add e.Current
             while e.MoveNext() do t.Add e.Current
-            t.AsPersistent()
+            t.ToImmutable()
         
     /// Replaces element an given `index` with provided `item`. Returns an updated vector and replaced element.
     [<CompiledName("Update")>]
@@ -603,11 +664,11 @@ module Vec =
     [<CompiledName("Filter")>]
     let filter (f: 'a -> bool) (v: Vec<_>): Vec<_> =
         //TODO: optimize path, where all elements have satisfied the predicate
-        let mutable t = empty.AsTransient()
+        let mutable t = empty.AsBuilder()
         for item in v do
             if f item then
                 t.Add item
-        t.AsPersistent()
+        t.ToImmutable()
             
     
     /// Iterates over all elements of the vector (starting from its beginning), and checks if any of them satisfies
@@ -632,12 +693,12 @@ module Vec =
     
     [<CompiledName("Choose")>]
     let choose (f: 'a -> 'b option) (v: Vec<_>): Vec<'b> =
-        let t = empty.AsTransient()
+        let t = empty.AsBuilder()
         for item in v do
             match f item with
             | None -> ()
             | Some m -> t.Add m
-        t.AsPersistent()
+        t.ToImmutable()
             
     [<CompiledName("Slice")>]
     let slice (low: int) (high: int) (v: Vec<_>): VecRangedEnumerator<'a> = new VecRangedEnumerator<'a>(v, low, high)
@@ -685,3 +746,7 @@ module Vec =
     /// in reverse direction (starting from end).
     [<CompiledName("GetReverseEnumerator")>]       
     let inline rev (v: Vec<'a>) = Reverser(v)
+    
+    /// Returns a read-only sequence, which contains efficient access to a chunked contents of given vector.
+    [<CompiledName("ToReadOnlySequence")>]
+    let inline toReadOnlySeq (v: Vec<'a>): ReadOnlySequence<'a> = v.AsReadOnlySequence()

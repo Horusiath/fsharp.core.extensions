@@ -7,9 +7,11 @@
     <Compile Include="Prolog.fs" />
     <Compile Include="Memory.fs" />
     <Compile Include="Atomic.fs" />
+    <Compile Include="LazyTask.fs" />
     <Compile Include="Enum.fs" />
     <Compile Include="Vec.fs" />
-    <Compile Include="PrefixMap.fs" />
+    <Compile Include="Lru.fs" />
+    <Compile Include="RadixMap.fs" />
     <Compile Include="Random.fs" />
     <Content Include="paket.references" />
   </ItemGroup>

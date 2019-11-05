@@ -22,10 +22,9 @@ open FSharp.Core
 open FsCheck
 open Expecto
 
-[<CustomEquality;NoComparison>]
+[<ReferenceEquality;NoComparison>]
 type Point =
     { x: int; y: int }
-    override this.Equals(other) = obj.ReferenceEquals(this, other)
 
 [<Tests>]
 let tests =
@@ -123,9 +122,9 @@ let tests =
             Expect.equal removed v.[v.Count-1] "Vec.pop should remove last element"
             Expect.isFalse (Vec.contains removed v') "Vec.pop should return a vector with the last value removed"
             
-        ftestProperty "should be able to append many elements at once" <| fun (a:int[], b:int[]) ->
+        testProperty "should be able to append many elements at once" <| fun (a:int[], b:int[]) ->
             let v = a |> Vec.ofArray
             let expected = Array.append a b
             let actual = Vec.append v b |> Vec.toArray
-            Expect.equal actual expected "Vec.append should be able to append many elements"            
+            Expect.equal actual expected "Vec.append should be able to append many elements"
     ]

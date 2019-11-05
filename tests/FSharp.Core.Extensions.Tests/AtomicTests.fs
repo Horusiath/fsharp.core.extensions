@@ -234,5 +234,12 @@ let tests =
             let a = atom true
             let old = a |> Atomic.update (not)
             Expect.equal old true  "Atomic update should return previously stored value"
-            Expect.equal !a false "Atomic update should return updated value"       
+            Expect.equal !a false "Atomic update should return updated value"
+            
+        testCase "Atomic operators are composable" <| fun _ ->
+            let a = atom 1
+            let b = atom 2
+            ignore (a := b := !a)
+            Expect.equal !a 2 "`a` should have an old value of `b`"
+            Expect.equal !b 1 "`b` should have an old value of `a`"
     ]

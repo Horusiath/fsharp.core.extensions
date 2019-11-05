@@ -2,3 +2,4 @@ FSharp.Core
 Expecto
 Expecto.FsCheck
 Expecto.VisualStudio.TestAdapter
+Ply
