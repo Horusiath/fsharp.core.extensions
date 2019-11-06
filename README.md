@@ -51,6 +51,25 @@ let users = atom Set.empty
 users |> Atomic.update (fun s -> Set.add "Alice" s) //returns: a state of Set prior to update
 ```
 
+#### Atomic update performance
+
+Here's the performance check of given operations - the operation is about getting reading a stored value, modifying it, storing and returning updated result. All of these operations must happen in thread-safe manner. We're comparing:
+
+- *InterlockedLoop* as a baseline which uses an `Interlocked.CompareExchange` done in a loop until value has been safelly updated.
+- *AtomicUpdate* which is a variant above wrapped into a generic functionality of `Atomic.update` function.
+- *ObjectLock* which uses `lock` method over object sync root.
+- *Mutex* which uses `Mutex` as a tool of control.
+- *SemaphoreSlim* which uses `SemaphoreSlim` - an optimized variant of mutex/semaphore.
+
+|          Method |         Mean |      Error |     StdDev |  Ratio | RatioSD |  Gen 0 | Gen 1 | Gen 2 | Allocated |
+|---------------- |-------------:|-----------:|-----------:|-------:|--------:|-------:|------:|------:|----------:|
+| InterlockedLoop |     6.639 ns |  0.0821 ns |  0.0768 ns |   1.00 |    0.00 |      - |     - |     - |         - |
+|    AtomicUpdate |     9.373 ns |  0.2935 ns |  0.4302 ns |   1.43 |    0.09 | 0.0115 |     - |     - |      24 B |
+|      ObjectLock |    15.550 ns |  0.3465 ns |  0.4382 ns |   2.36 |    0.09 |      - |     - |     - |         - |
+|           Mutex | 1,423.705 ns | 59.8898 ns | 98.4006 ns | 223.52 |   18.64 |      - |     - |     - |         - |
+|   SemaphoreSlim |    45.281 ns |  0.9881 ns |  1.1763 ns |   6.86 |    0.19 |      - |     - |     - |         - |
+
+
 ### Vec
 
 `Vec<'a>` or `'a vec` is a persistent immutable data type, which provides a fairly fast add/remove operations (which append value to the tail of the collection as oposed to list), which are *O(log32(n))* (which for an in-memory data structure is effectivelly close to *O(1)*). It's also optimized for `for` loop traversals which are close in speed to native array.
