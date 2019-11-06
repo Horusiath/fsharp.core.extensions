@@ -150,13 +150,13 @@ module Atomic =
 
     /// Atomically tries to update value stored inside an atom, by passing
     /// current atom's value to modify function to get new result, which will
-    /// be stored instead. Returns the last value stored prior to an update.
+    /// be stored instead. Returns an updated value.
     let update (modify: 'a -> 'a) (atom: #IAtomic<'a>): 'a =
         let rec loop (modify: 'a -> 'a) (atom: #IAtomic<'a>) =
             let old = atom.Value ()
             let nval = modify old
             if cas old nval atom
-            then old
+            then nval
             else loop modify atom
         loop modify atom
 

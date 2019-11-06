@@ -53,8 +53,8 @@ let tests =
 
         testCase "Atomic ref update replaces old value with modified one" <| fun _ ->
             let a = atom "hello"
-            let old = a |> Atomic.update (fun o -> o + o)
-            Expect.equal old "hello"  "Atomic update should return previously stored value"
+            let updated = a |> Atomic.update (fun o -> o + o)
+            Expect.equal updated "hellohello"  "Atomic update should return previously stored value"
             Expect.equal !a "hellohello" "Atomic update should return updated value"
 
         (* AtomicInt *)
@@ -84,8 +84,8 @@ let tests =
 
         testCase "Atomic int update replaces old value with modified one" <| fun _ ->
             let a = atom 1
-            let old = a |> Atomic.update (fun o -> o + o)
-            Expect.equal old 1  "Atomic update should return previously stored value"
+            let value = a |> Atomic.update (fun o -> o + o)
+            Expect.equal value 2  "Atomic update should return previously stored value"
             Expect.equal !a 2 "Atomic update should return updated value"
 
         testCase "Atomic int increments the value" <| fun _ ->
@@ -127,8 +127,8 @@ let tests =
 
         testCase "Atomic int64 update replaces old value with modified one" <| fun _ ->
             let a = atom 1L
-            let old = a |> Atomic.update (fun o -> o + o)
-            Expect.equal old 1L  "Atomic update should return previously stored value"
+            let value = a |> Atomic.update (fun o -> o + o)
+            Expect.equal value 2L  "Atomic update should return previously stored value"
             Expect.equal !a 2L "Atomic update should return updated value"
 
         testCase "Atomic int64 increments the value" <| fun _ ->
@@ -170,8 +170,8 @@ let tests =
 
         testCase "Atomic float update replaces old value with modified one" <| fun _ ->
             let a = atom 1.0
-            let old = a |> Atomic.update (fun o -> o + o)
-            Expect.equal old 1.0  "Atomic update should return previously stored value"
+            let value = a |> Atomic.update (fun o -> o + o)
+            Expect.equal value 2.0  "Atomic update should return previously stored value"
             Expect.equal !a 2.0 "Atomic update should return updated value"
  
         (* AtomicFloat32 *)
@@ -201,8 +201,8 @@ let tests =
 
         testCase "Atomic float32 update replaces old value with modified one" <| fun _ ->
             let a = atom 1.0f
-            let old = a |> Atomic.update (fun o -> o + o)
-            Expect.equal old 1.0f  "Atomic update should return previously stored value"
+            let value = a |> Atomic.update (fun o -> o + o)
+            Expect.equal value 2.0f  "Atomic update should return previously stored value"
             Expect.equal !a 2.0f "Atomic update should return updated value"
 
         (* AtomicBool *)
@@ -232,8 +232,8 @@ let tests =
 
         testCase "Atomic bool update replaces old value with modified one" <| fun _ ->
             let a = atom true
-            let old = a |> Atomic.update (not)
-            Expect.equal old true  "Atomic update should return previously stored value"
+            let value = a |> Atomic.update (not)
+            Expect.equal value false  "Atomic update should return previously stored value"
             Expect.equal !a false "Atomic update should return updated value"
             
         testCase "Atomic operators are composable" <| fun _ ->

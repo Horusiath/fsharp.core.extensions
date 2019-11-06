@@ -9,6 +9,7 @@
     <Compile Include="Atomic.fs" />
     <Compile Include="Array.fs" />
     <Compile Include="LazyTask.fs" />
+    <Compile Include="HybridTime.fs" />
     <Compile Include="Enum.fs" />
     <Compile Include="Vec.fs" />
     <Compile Include="Lru.fs" />

@@ -10,6 +10,7 @@
     <Compile Include="VecTests.fs" />
     <Compile Include="LazyTaskTests.fs" />
     <Compile Include="EnumTests.fs" />
+    <Compile Include="HybridTimeTests.fs" />
     <Compile Include="Main.fs" />
     <Content Include="paket.references" />
   </ItemGroup>

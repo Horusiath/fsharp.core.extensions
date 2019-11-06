@@ -47,10 +47,17 @@ type LazyTask<'a>(fn: unit -> Task<'a>) =
             (Task.Run<'a>(Func<Task<'a>>(fn)) |> Task.fulfill promise)
             promise.Task
         else old.Task
+    
+    /// Checks if current lazy cell contains a computed (initialized) value.
     member this.HasValue =
         let value = Volatile.Read(&result)
-        value.Task.IsCompletedSuccessfully
+        not (isNull value) && value.Task.IsCompletedSuccessfully
+        
+    /// Returns a task, which holds a result of initializing function passed to this LazyTask.
+    /// Once computed, the same value will be returned in all subsequent calls.
     member this.Value =
         let old = Volatile.Read(&result)
-        if isNull old then getValue() else old.Task
+        if isNull old
+        then getValue() // since `getValue()` allocates, we only call it if current lazy task was never called (in causal past)
+        else old.Task // > 99% of the time value is already computed so no need to reallocate
         
