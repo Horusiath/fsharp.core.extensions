@@ -22,30 +22,6 @@ open System.Buffers
 #nowarn "9"
 
 [<RequireQualifiedAccess>]
-module Array =
-        
-    /// Inserts a `value` at the given `index` of an `array`,
-    /// returning new array in the result with all contents copied and expanded by inserted item.
-    let insert (index: int) (value: 'a) (array: 'a[]): 'a[] =
-        let count = array.Length
-        if index < 0 || index > count then raise (IndexOutOfRangeException (sprintf "Cannot insert value at index %i of array of size %i" index count))
-        else
-            let copy = Array.zeroCreate (count+1)
-            Array.blit array 0 copy 0 index
-            copy.[index] <- value
-            Array.blit array index copy (index+1) (count-index)
-            copy
-    
-    let removeAt (index: int) (array: 'a[]): 'a[] =
-        let count = array.Length
-        if index < 0 || index > count then raise (IndexOutOfRangeException (sprintf "Cannot insert value at index %i of array of size %i" index count))
-        else
-            let copy = Array.zeroCreate (count-1)
-            Array.blit array 0 copy 0 (index-1)
-            Array.blit array index copy (index+1) (count-index)
-            copy
-
-[<RequireQualifiedAccess>]
 module Span =
 
     open FSharp.NativeInterop
