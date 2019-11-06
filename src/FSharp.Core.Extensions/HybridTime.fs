@@ -53,12 +53,11 @@ module HybridTime =
     /// Converts current `HybridTime` to a `DateTime`.
     let inline toDateTime (time: HybridTime): DateTime = DateTime(time.Ticks, DateTimeKind.Utc)
          
+    let private getTime = fun t -> max (osTime ()) (t+1L)
+         
     /// Returns a hybrid time, which can be used to represent a UTC-compatible time.
     let now (): HybridTime =
-        let ticks = 
-            latestTicks
-            |> Atomic.update (fun t -> max (osTime ()) (t+1L))
-        { Ticks = ticks }
+        { Ticks = latestTicks |> Atomic.update getTime }
         
     /// Returns the ticks (close equivalent to DateTime.Ticks) stored inside `HybridTime`.
     let inline ticks (time: HybridTime): int64 = time.Ticks
