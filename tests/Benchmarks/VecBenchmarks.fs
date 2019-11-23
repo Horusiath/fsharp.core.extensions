@@ -4,6 +4,7 @@ open System.Collections.Immutable
 open BenchmarkDotNet.Attributes
 open FSharp.Core
 open FSharpx.Collections
+open FSharpx.Collections
 
 type User = { FirstName: string; LastName: string; Age: int }
 
@@ -60,6 +61,53 @@ type VecAppendBenchmarks() =
         let mutable array = Vec.empty
         for item in this.items do
             array <- Vec.add item array
+        array
+        
+[<MemoryDiagnoser>]
+type VecAppendByteBenchmarks() =
+
+    [<DefaultValue; Params(500, 4000)>]
+    val mutable to_append: int
+    
+    [<DefaultValue>]
+    val mutable items: byte[]
+
+    [<GlobalSetup>]
+    member this.Setup() =
+        this.items <- Random.bytes this.to_append
+        
+    [<GlobalCleanup>]
+    member this.Cleanup() =
+        this.items <- null
+
+    [<Benchmark(Baseline=true)>]
+    member this.MutableListAppend() =
+        let list = ResizeArray()
+        list.AddRange this.items
+        list
+        
+    [<Benchmark>]
+    member this.ImmutableListAppend() =
+        let mutable list = ImmutableList.Empty
+        list <- list.AddRange this.items
+        list
+        
+    [<Benchmark>]
+    member this.ImmutableArrayAppend() =
+        let mutable array = ImmutableArray.Empty
+        array <- array.AddRange this.items
+        array
+        
+    [<Benchmark>]
+    member this.FSharpxVectorAppend() =
+        let mutable array = PersistentVector.empty
+        array <- PersistentVector.append array (PersistentVector.ofSeq this.items)
+        array
+        
+    [<Benchmark>]
+    member this.VecAppend() =
+        let mutable array = Vec.empty
+        array <- Vec.append array this.items
         array
 
 [<MemoryDiagnoser>]

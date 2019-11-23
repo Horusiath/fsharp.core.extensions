@@ -21,6 +21,7 @@ open System
 open System.Numerics
 open System.Collections.Generic
 open System.Runtime.CompilerServices
+open System.Runtime.CompilerServices
 open System.Runtime.InteropServices
 open System.Runtime.Intrinsics
 
@@ -57,13 +58,13 @@ type internal ArtNode<'a>(flags: NodeFlags) =
     member __.Flags = flags
     member __.IsLeaf = flags.HasFlag(NodeFlags.Leaf)
 
-and [<Sealed>] internal ArtLeaf<'a>(key: byte[], value: 'a) =
+and [<Sealed>] internal ArtLeaf<'a>(key: string, value: 'a) =
     inherit ArtNode<'a>(NodeFlags.Leaf)
     member inline __.Key = key
     member inline __.Value = value
-    member inline __.IsMatch(s: ReadOnlySpan<byte>) = s.SequenceEqual(ReadOnlySpan<_> key)
+    member inline __.IsMatch(s: string) = s = key
     member __.LongestCommonPrefix(other: ArtLeaf<'a>, depth: int) =
-        let rec loop (a: byte[]) (b: byte[]) maxCmp depth i=
+        let rec loop (a: string) (b: string) maxCmp depth i=
             if i < maxCmp then
                 if a.[i] <> b.[i + depth] then i
                 else loop a b maxCmp depth (i+1)
@@ -291,12 +292,14 @@ module internal ArtNode =
 //                    null
 //                | child -> insert child &child key value (depth+1) old
                 
-[<Struct>]
+[<IsByRefLike;Struct>]
 type ArtEnumerator<'a> internal(root: ArtNode<'a>) =
-    interface IEnumerator<KeyValuePair<byte[], 'a>> with
-        member this.Current: KeyValuePair<byte[], 'a> = failwith "not implemented"
-        member this.Current: obj = failwith "not implemented"
-        member this.MoveNext() = failwith "not implemented"
+    member this.Current = failwith "not implemented"
+    member this.MoveNext(): bool = failwith "not implemented"
+    interface IEnumerator<KeyValuePair<string, 'a>> with
+        member this.Current: KeyValuePair<string, 'a> = this.Current
+        member this.Current: obj = upcast this.Current
+        member this.MoveNext(): bool = this.MoveNext()
         member this.Reset() = failwith "not implemented"
         member this.Dispose() = ()
                 
@@ -304,9 +307,10 @@ type ArtEnumerator<'a> internal(root: ArtNode<'a>) =
 /// Immutable Adaptive Radix Tree (ART), which can be treated like `Map<byte[], 'a>`.
 /// Major advantage is prefix-based lookup capability.
 type Art<'a> internal(count: int, root: ArtNode<'a>) =
-    static member Empty: Art<'a> = Art<'a>(0, ArtNode.leaf [||] Unchecked.defaultof<_>)
+    static member Empty: Art<'a> = Art<'a>(0, ArtNode.leaf "" Unchecked.defaultof<_>)
     member this.Count = count
-    member this.Search(key: ReadOnlySpan<byte>) =
+    member this.Search(phrase: string) =
+        let key = phrase.AsSpan()
         let mutable n = root
         let mutable depth = 0
         let mutable result = ValueNone
@@ -314,7 +318,7 @@ type Art<'a> internal(count: int, root: ArtNode<'a>) =
             if n.IsLeaf then
                 let leaf = n :?> ArtLeaf<'a>
                 // Check if the expanded path matches
-                if leaf.IsMatch key then
+                if leaf.IsMatch phrase then
                     result <- ValueSome leaf.Value
                 n <- null
             else
@@ -343,8 +347,8 @@ type Art<'a> internal(count: int, root: ArtNode<'a>) =
         (leaf.Key, leaf.Value)
         
     member __.GetEnumerator() = new ArtEnumerator<'a>(root)
-    interface IEnumerable<KeyValuePair<byte[], 'a>> with
-        member this.GetEnumerator(): IEnumerator<KeyValuePair<byte[], 'a>> = upcast this.GetEnumerator()
+    interface IEnumerable<KeyValuePair<string, 'a>> with
+        member this.GetEnumerator(): IEnumerator<KeyValuePair<string, 'a>> = upcast this.GetEnumerator()
         member this.GetEnumerator(): System.Collections.IEnumerator = upcast this.GetEnumerator()
         
                  
@@ -362,50 +366,108 @@ module Art =
     
     /// Returns a minimum element of provided Adaptive Radix Tree.
     /// Fails with exception if `map` is empty.
-    let inline min (map: Art<'a>): (byte[] * 'a) = map.Minimum
+    let inline min (map: Art<'a>): (string * 'a) = map.Minimum
     
     /// Returns a maximum element of provided Adaptive Radix Tree.
     /// Fails with exception if `map` is empty.
-    let inline max (map: Art<'a>): (byte[] * 'a) = map.Maximum
+    let inline max (map: Art<'a>): (string * 'a) = map.Maximum
 
+    /// Inserts a new `value` under provided `key`, returning a new Adaptive Radix Tree in the result.
+    /// If there was already another value under the provided `key`, it will be overriden.
+    let add (key: string) (value: 'a) (map: Art<'a>): Art<'a> = failwith "not implemented"
+    
     /// Creates a new Adaptive Radix Tree out of provided tuple sequence.
-    let ofSeq (seq: seq<byte[] * 'a>): Art<'a> = failwith "not implemented"
+    let ofSeq (seq: seq<string * 'a>): Art<'a> =
+        let mutable a = empty
+        for (key, value) in seq do
+            a <- add key value a
+        a
     
     /// Creates a new Adaptive Radix Tree out of provided key-value sequence.
-    let ofMap (map: #seq<KeyValuePair<byte[], 'a>>): Art<'a> = failwith "not implemented"
-    
-    /// Inserts a new `value` under provided `key`, returning a new Adaptive Radix Tree in the result.
-    /// If there was already another value under the provided `key`, it will be overriden.
-    let add (key: ReadOnlySpan<byte>) (value: 'a) (map: Art<'a>): Art<'a> = failwith "not implemented"
-    
+    let ofMap (map: #seq<KeyValuePair<string, 'a>>): Art<'a> =
+        let mutable a = empty
+        for kv in map do
+            a <- add kv.Key kv.Value a
+        a
+
     /// Removes an entry for a provided `key` returning a new Adaptive Radix Tree without that element.
-    let remove (key: ReadOnlySpan<byte>) (map: Art<'a>): Art<'a> = failwith "not implemented"
-    
-    /// Inserts a new `value` under provided `key`, returning a new Adaptive Radix Tree in the result.
-    /// If there was already another value under the provided `key`, it will be overriden.
-    /// Unlike `Art.add`, this one takes byte array as a parameter and will not copy the key - it's up to
-    /// user to guarantee that `key` byte array will not be changed. 
-    let addUnsafe (key: byte[]) (value: 'a) (map: Art<'a>): Art<'a> = failwith "not implemented"
+    let remove (key: string) (map: Art<'a>): Art<'a> = failwith "not implemented"
     
     /// Tries to find a a value under provided `key`.
-    let tryFind (key: ReadOnlySpan<byte>) (map: Art<'a>): 'a voption = failwith "not implemented"
+    let tryFind (key: string) (map: Art<'a>): 'a voption = failwith "not implemented"
     
     /// Returns a sequence of key-value elements, which starts with a given `prefix`.
-    let prefixed (prefix: byte[]) (map: Art<'a>): KeyValuePair<byte[], 'a> seq = failwith "not implemented"
+    let prefixed (prefix: string) (map: Art<'a>): KeyValuePair<string, 'a> seq = failwith "not implemented"
     
     /// Maps all key-value entries of a given Adaptive Radix Tree into new values using function `fn`,
     /// returning a new ART map with modified values.
-    let map (fn: byte[] -> 'a -> 'b) (map: Art<'a>): Art<'a> = failwith "not implemented"
+    let map (fn: string -> 'a -> 'b) (map: Art<'a>): Art<'b> =
+        let mutable b = empty
+        if isEmpty map then b
+        else
+            for kv in map do
+                b <- add kv.Key (fn kv.Key kv.Value) b
+            b
     
     /// Filters all key-value entries of a given Adaptive Radix Tree into new values using predicate `fn`,
     /// returning a new ART map with only these entries, which satisfied given predicate.
-    let filter (fn: byte[] -> 'a -> bool) (map: Art<'a>): Art<'a> = failwith "not implemented"
+    let filter (fn: string -> 'a -> bool) (map: Art<'a>): Art<'a> =
+        if isEmpty map then map
+        else
+            //TODO: optimize case, when all map elements satisfy predicate - we can return old map then
+            let mutable filtered = empty
+            for kv in map do
+                if fn kv.Key kv.Value then
+                    filtered <- add kv.Key kv.Value filtered
+            filtered
     
     /// Zips two maps together, combining the corresponding entries using provided function `fn`.
     /// Any element that was not found in either of the maps, will be omitted from the output.
-    let intersect (fn: byte[] -> 'a -> 'b -> 'c) (a: Art<'a>) (b: Art<'b>): Art<'c> = failwith "not implemented"
+    let intersect (fn: string -> 'a -> 'b -> 'c) (a: Art<'a>) (b: Art<'b>): Art<'c> =
+        let inline compare (x: string) (y: string) = StringComparer.Ordinal.Compare(x, y)
+        let mutable c = Art<'c>.Empty
+        if isEmpty a || isEmpty b then c 
+        else
+            let mutable ea = a.GetEnumerator()
+            let mutable eb = b.GetEnumerator()
+            let mutable inProgress = ea.MoveNext() && eb.MoveNext()
+            while inProgress do
+                let kva = ea.Current
+                let kvb = eb.Current
+                match sign (compare kva.Key kvb.Key) with
+                | 0 ->
+                    let value' = fn kva.Key kva.Value kvb.Value
+                    c <- add kva.Key value' c
+                    inProgress <- ea.MoveNext() && eb.MoveNext()
+                | 1 ->
+                    inProgress <- eb.MoveNext()
+                | -1 ->
+                    inProgress <- ea.MoveNext()
+            c
     
     /// Combines two maps together, taking a union of their corresponding entries. If both maps have
     /// a value for the corresponding entry, a function 'fn` will be used to resolve conflict.
-    let union (fn: byte[] -> 'a -> 'a -> 'a) (a: Art<'a>) (b: Art<'a>): Art<'a> = failwith "not implemented"
+    let union (fn: string -> 'a -> 'a -> 'a) (a: Art<'a>) (b: Art<'a>): Art<'a> = 
+        let inline compare (x: string) (y: string) = StringComparer.Ordinal.Compare(x, y)
+        let mutable c = Art<'a>.Empty
+        if isEmpty a || isEmpty b then c 
+        else
+            let mutable ea = a.GetEnumerator()
+            let mutable eb = b.GetEnumerator()
+            let mutable inProgress = ea.MoveNext() && eb.MoveNext()
+            while inProgress do
+                let kva = ea.Current
+                let kvb = eb.Current
+                match sign (compare kva.Key kvb.Key) with
+                | 0 ->
+                    let value' = fn kva.Key kva.Value kvb.Value
+                    c <- add kva.Key value' c
+                    inProgress <- ea.MoveNext() && eb.MoveNext()
+                | 1 ->
+                    c <- add kvb.Key kvb.Value c
+                    inProgress <- eb.MoveNext()
+                | -1 ->
+                    c <- add kva.Key kva.Value c
+                    inProgress <- ea.MoveNext()
+            c
     

@@ -42,6 +42,15 @@ module Random =
     
     type internal R = ThreadSafeRandom
 
+    /// Mutates provided `array` by filling it with random bytes
+    let fill (array: byte[]) = R.Current.NextBytes(array)
+    
+    /// Returns an array of randomized bytes of a given `size`.
+    let bytes (size: int) =
+        let buf = Array.zeroCreate size
+        R.Current.NextBytes buf
+        buf
+    
     /// Returns a random 32bit integer. This is a thread safe operation.
     let int32 (): int = R.Current.Next()
 

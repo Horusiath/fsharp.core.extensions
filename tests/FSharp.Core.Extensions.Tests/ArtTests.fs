@@ -24,9 +24,7 @@ open System
 open System.Text
 open System.Collections.Generic
 
-let utf8 (s: string) = Encoding.UTF8.GetBytes(s)
-
-//[<Tests>]
+[<Tests>]
 let tests =
     testList "Adaptive Radix Tree" [
 
@@ -38,36 +36,34 @@ let tests =
         testProperty "should be able to add multiple entries" <| fun (entries: (string * int) []) ->
             let mutable a = Art.empty
             for (k, v) in entries do
-                let bytes = ReadOnlySpan (utf8 k)
-                a <- Art.add bytes v a
+                a <- Art.add k v a
                 Expect.isFalse (Art.isEmpty a) "after adding an element, ART should no longer be empty"
-                Expect.isTrue (Art.tryFind bytes a |> ValueOption.isSome) "ART should be able to retrieve inserted element"
+                Expect.isTrue (Art.tryFind k a |> ValueOption.isSome) "ART should be able to retrieve inserted element"
                 
         testProperty "should be able to construct map from sequence of elements" <| fun (entries: (string * int) []) ->
-            let a = Art.ofSeq (entries |> Array.map (fun (k, v) -> utf8 k, v))
+            let a = Art.ofSeq entries
             let distinct = entries |> Array.distinctBy fst
             Expect.equal a.Count distinct.Length "ART map should contain all unique elements of provided array"
             
         testProperty "should be able to remove inserted elements" <| fun (entries: (string * int) []) ->
-            let mutable a = Art.ofSeq (entries |> Array.map (fun (k, v) -> utf8 k, v))
+            let mutable a = Art.ofSeq entries
             for (KeyValue (k, v)) in a do
-                a <- Art.remove (ReadOnlySpan k) a
-                Expect.equal (Art.tryFind (ReadOnlySpan k) a) ValueNone <| sprintf "Value for key %A should no longer be present" (k)
+                a <- Art.remove k a
+                Expect.equal (Art.tryFind k a) ValueNone <| sprintf "Value for key %A should no longer be present" (k)
                 
         testCase "should be able to read all elements with given prefix" <| fun _ ->
             let input = [
-                (Encoding.UTF8.GetBytes "romane", 1)
-                (Encoding.UTF8.GetBytes "romanus", 2)
-                (Encoding.UTF8.GetBytes "romulus", 3)
-                (Encoding.UTF8.GetBytes "rubens", 4)
-                (Encoding.UTF8.GetBytes "ruber", 5)
-                (Encoding.UTF8.GetBytes "rubicon", 6)
-                (Encoding.UTF8.GetBytes "rubicundus", 7) ]
+                ("romane", 1)
+                ("romanus", 2)
+                ("romulus", 3)
+                ("rubens", 4)
+                ("ruber", 5)
+                ("rubicon", 6)
+                ("rubicundus", 7) ]
             let a = Art.ofSeq input
-            let key = (utf8 "rube")
-            let actual = a |> Art.prefixed key |> List.ofSeq
+            let actual = a |> Art.prefixed "rube" |> List.ofSeq
             let expected = [
-                KeyValuePair<_,_>(utf8 "rubens", 4)
-                KeyValuePair<_,_>(utf8 "ruber", 5) ]
+                KeyValuePair<_,_>("rubens", 4)
+                KeyValuePair<_,_>("ruber", 5) ]
             Expect.equal actual expected "ART map should return all entries with keys starting with 'rube'"
     ]
