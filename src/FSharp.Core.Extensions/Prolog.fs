@@ -14,14 +14,13 @@ limitations under the License.
 
 *)
 
-module FSharp.Core.ExtOperators
+module FSharp.Core.Operators
 
 open System
 open System.Collections.Generic
-open System.Collections.Generic
 
 /// An operator over a implicit cast operation.
-let inline (~%) (x:^a) : ^b = ((^a or ^b) : (static member op_Implicit : ^a -> ^b) x)  
+let inline (!%) (x:^a) : ^b = ((^a or ^b) : (static member op_Implicit : ^a -> ^b) x)  
 
 /// Creates a key value pair out of provided `key` and `value` arguments.
 let inline (=>) (key: 'k) (value: 'v): KeyValuePair<'k,'v> = KeyValuePair(key, value)

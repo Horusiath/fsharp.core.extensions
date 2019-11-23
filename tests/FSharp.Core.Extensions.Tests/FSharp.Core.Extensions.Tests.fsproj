@@ -8,6 +8,7 @@
   <ItemGroup>
     <Compile Include="AtomicTests.fs" />
     <Compile Include="VecTests.fs" />
+    <Compile Include="ArtTests.fs" />
     <Compile Include="LazyTaskTests.fs" />
     <Compile Include="EnumTests.fs" />
     <Compile Include="HybridTimeTests.fs" />

@@ -233,12 +233,12 @@ Here, we are converting an array of 1000 elements into a final representation of
 - *VecOfArray* represents `Vec.ofArray items` - an implementation of immutable vector made in this repository.
 - *FSharpxVecOfArray* represents a `PersistentVector.ofSeq items` from [FSharpx.Collections](https://github.com/fsprojects/FSharpx.Collections), which is another implementation of the same data structure as the one implemented here.
 
-|               Method |        Mean |       Error |      StdDev |   Gen 0 | Gen 1 | Gen 2 | Allocated |
-|--------------------- |------------:|------------:|------------:|--------:|------:|------:|----------:|
-|   ResizeArrayOfArray |    683.0 ns |    13.62 ns |    30.75 ns |  3.8452 |     - |     - |   7.87 KB |
-| ImmutableListOfArray | 34,739.8 ns | 1,736.68 ns | 4,954.84 ns | 22.9492 |     - |     - |  46.92 KB |
-|    FSharpListOfArray | 12,979.5 ns |   211.91 ns |   176.95 ns | 15.2893 |     - |     - |  31.25 KB |
-|    FSharpxVecOfArray | 50,078.3 ns | 1,414.83 ns | 1,737.54 ns |  5.0049 |     - |     - |  10.26 KB |
-|           VecOfArray | 11,784.9 ns |   304.26 ns |   897.11 ns |  9.3536 |     - |     - |   19.1 KB |
+|               Method |      Mean |     Error |    StdDev |   Gen 0 | Gen 1 | Gen 2 | Allocated |
+|--------------------- |----------:|----------:|----------:|--------:|------:|------:|----------:|
+|   ResizeArrayOfArray |  1.580 us | 0.0318 us | 0.0390 us |  3.8452 |     - |     - |   7.87 KB |
+| ImmutableListOfArray | 62.571 us | 1.2125 us | 1.7389 us | 22.9492 |     - |     - |  46.92 KB |
+|    FSharpListOfArray | 20.699 us | 0.4118 us | 0.4406 us | 15.2893 |     - |     - |  31.25 KB |
+|    FSharpxVecOfArray | 85.473 us | 5.5849 us | 8.0098 us |  5.0049 |     - |     - |  10.26 KB |
+|           VecOfArray | 11.720 us | 0.2322 us | 0.3020 us |  9.3536 |     - |     - |   19.1 KB |
 
 Note: since FSharpx implementation internally represents stored elements as `obj`, in case of value types there's an additional cost related to boxing.

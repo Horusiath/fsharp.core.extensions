@@ -17,6 +17,7 @@ limitations under the License.
 namespace FSharp.Core
 
 open System
+open System
 open System.Buffers
 open System.Buffers
 open System.Collections.Generic
@@ -105,6 +106,31 @@ type internal VecBuilder<'a> =
             this.root <- root'
             this.shift <- shift'
             this.count <- this.count + 1
+    member this.AddRange(values: 'a[]) =
+        let mutable remaining = values.Length
+        let mutable valuesOffset = 0
+        while remaining <> 0 do
+            let start = this.count&&&VecConst.mask
+            let size = Math.Min(remaining, VecConst.capacity - start)
+            Array.blit values valuesOffset this.tail start size
+            this.count <- this.count + size
+            valuesOffset <- valuesOffset + size
+            remaining <- remaining - size
+            if remaining <> 0 then
+                let mutable shift' = this.shift
+                let tailNode = Leaf this.tail
+                this.tail <- Array.zeroCreate VecConst.capacity
+                let root' =
+                    if ((this.count >>> VecConst.off) > (1 <<< this.shift)) then
+                        let n = Array.zeroCreate VecConst.capacity
+                        n.[0] <- this.root
+                        n.[1] <- VecConst.pathFor this.shift tailNode
+                        shift' <- shift' + 5
+                        Branch n
+                    else
+                        VecConst.appendTail this.count this.shift this.root tailNode
+                this.root <- root'
+                this.shift <- shift'
     
 
 and [<IsByRefLike;Struct>] VecEnumerator<'a>(vector: Vec<'a>) =
@@ -186,8 +212,7 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
         if count = 0 then empty
         elif count > VecConst.capacity then
             let mutable v = empty.AsBuilder()
-            for item in items do
-                v.Add(item)
+            v.AddRange(items)
             v.ToImmutable()
         else
             Vec<_>(count, VecConst.off, emptyNode, Array.copy items)
@@ -550,11 +575,14 @@ module Vec =
     [<CompiledName("Add")>]
     let inline add (item: 'a) (v: Vec<_>) : Vec<_> = v.Add(item)
     
-    /// Inserts a collection of elements at the end of vector, returning new vector in the result.
-    /// Complexity: O(m * log32(n)) - most of the time it's close to O(m), where m is the number of items to insert.
-    [<CompiledName("Append")>]
-    let append (v: Vec<'a>) (items: #seq<'a>): Vec<'a> =
-        //TODO: optimize
+    let private appendArray (v: Vec<'a>) (items: 'a[]) =
+        if items.Length = 0 then v
+        else
+            let mutable t = v.AsBuilder()
+            t.AddRange(items)
+            t.ToImmutable()
+        
+    let private appendSeq (v: Vec<'a>) (items: seq<'a>) =
         use e = items.GetEnumerator()
         if not (e.MoveNext()) then v
         else
@@ -562,6 +590,13 @@ module Vec =
             t.Add e.Current
             while e.MoveNext() do t.Add e.Current
             t.ToImmutable()
+    
+    /// Inserts a collection of elements at the end of vector, returning new vector in the result.
+    /// Complexity: O(m * log32(n)) - most of the time it's close to O(m), where m is the number of items to insert.
+    [<CompiledName("Append")>]
+    let append (v: Vec<'a>) (items: seq<'a>): Vec<'a> =
+        if items.GetType().IsArray then appendArray v (downcast items)
+        else appendSeq v items
         
     /// Replaces element an given `index` with provided `item`. Returns an updated vector and replaced element.
     [<CompiledName("Update")>]

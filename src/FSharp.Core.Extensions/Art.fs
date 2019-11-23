@@ -17,6 +17,7 @@ limitations under the License.
 namespace FSharp.Core
 
 open System
+open System
 open System.Numerics
 open System.Collections.Generic
 open System.Runtime.CompilerServices
@@ -61,6 +62,14 @@ and [<Sealed>] internal ArtLeaf<'a>(key: byte[], value: 'a) =
     member inline __.Key = key
     member inline __.Value = value
     member inline __.IsMatch(s: ReadOnlySpan<byte>) = s.SequenceEqual(ReadOnlySpan<_> key)
+    member __.LongestCommonPrefix(other: ArtLeaf<'a>, depth: int) =
+        let rec loop (a: byte[]) (b: byte[]) maxCmp depth i=
+            if i < maxCmp then
+                if a.[i] <> b.[i + depth] then i
+                else loop a b maxCmp depth (i+1)
+            else i
+        let maxCmp = Math.Max(key.Length, other.Key.Length) - depth
+        loop key other.Key maxCmp depth 0
     
 and [<Sealed>] internal ArtBranch<'a>(flags: NodeFlags, childrenCount: byte, partialLength:int, partial:byte[], keys:byte[], children:ArtNode<'a>[]) =
     inherit ArtNode<'a>(flags)
@@ -106,7 +115,7 @@ and [<Sealed>] internal ArtBranch<'a>(flags: NodeFlags, childrenCount: byte, par
         
     /// Returns a number of prefix bytes shared between given `key` and this node.
     member this.PrefixLength(key: ReadOnlySpan<byte>, depth: int): int =
-        let len = min (min partialLength ArtConst.MaxPrefixLength) (key.Length - depth)
+        let len = Math.Min(Math.Min(partialLength, ArtConst.MaxPrefixLength), (key.Length - depth))
         let mutable i = 0
         let mutable cont = true
         while cont && i < len do
@@ -114,6 +123,7 @@ and [<Sealed>] internal ArtBranch<'a>(flags: NodeFlags, childrenCount: byte, par
                 cont <- false
             i <- i + 1
         i
+
         
 [<RequireQualifiedAccess>]
 module internal ArtNode =
@@ -163,8 +173,135 @@ module internal ArtNode =
             while branch.Keys.[i] <> 0uy do i <- i - 1
             max branch.Children.[i]
         | _ -> failwith "not supported"
+        
+    /// Calculates the index at which the prefixes mismatch   
+    let prefixMismatch(key: ReadOnlySpan<byte>) (depth: int) (n: ArtBranch<'a>) =
+        let mutable len = Math.Min(Math.Min(n.PartialLength, ArtConst.MaxPrefixLength), (key.Length - depth))
+        let mutable idx = -1
+        let mutable i = 0
+        while idx = -1 && i < len do
+            if n.Partial.[i] <> key.[depth + i] then
+                idx <- i
+            i <- i + 1
+        
+        if idx <> -1 then idx
+        elif n.PartialLength > ArtConst.MaxPrefixLength then
+            // If the prefix is short we can avoid finding a leaf
+            let leaf = min n
+            let maxCmp = Math.Min(leaf.Key.Length, key.Length) - depth
+            while idx = -1 && i < maxCmp do
+                if leaf.Key.[depth + i] <> key.[depth + i] then
+                    idx <- i
+                i <- i + 1
+            idx
+        else -1
+        
+    let rec insert (n: ArtNode<'a>) (ref: ArtNode<'a> outref) (key: byte[]) (value: 'a) (depth: int) (old: int outref) =
+        // If we are at a NULL node, inject a leaf
+        if isNull n then
+            ref <- leaf key value
+            null
+        elif n.IsLeaf then
+            let l = n :?> ArtLeaf<'a>
+            // Check if we are updating an existing value
+            if l.IsMatch(ReadOnlySpan<_>(key)) then
+                // replace existing key
+                null
+            else
+                // New value, we must split the leaf into a node4
+                let leaf' = leaf key value
+                let longestPrefix = l.LongestCommonPrefix(leaf', depth)
+                null
+                
+            (*
+            art_leaf *l = LEAF_RAW(n);
 
-/// Immutable Adaptative Radix Tree (ART), which can be treated like `Map<byte[], 'a>`.
+            // Check if we are updating an existing value
+            if (!leaf_matches(l, key, key_len, depth)) {
+                *old = 1;
+                void *old_val = l->value;
+                l->value = value;
+                return old_val;
+            }
+
+            // New value, we must split the leaf into a node4
+            art_node4 *new_node = (art_node4* )alloc_node(NODE4);
+
+            // Create a new leaf
+            art_leaf *l2 = make_leaf(key, key_len, value);
+
+            // Determine longest prefix
+            int longest_prefix = longest_common_prefix(l, l2, depth);
+            new_node->n.partial_len = longest_prefix;
+            memcpy(new_node->n.partial, key+depth, min(MAX_PREFIX_LEN, longest_prefix));
+            // Add the leafs to the new node4
+            *ref = (art_node* )new_node;
+            add_child4(new_node, ref, l->key[depth+longest_prefix], SET_LEAF(l));
+            add_child4(new_node, ref, l2->key[depth+longest_prefix], SET_LEAF(l2));
+            return NULL;            
+            *)
+            null
+        else
+            let branch = n :?> ArtBranch<'a>
+            // Check if given node has a prefix
+            if branch.PartialLength <> 0 then
+                let prefixDiff = prefixMismatch (ReadOnlySpan<_> key) depth branch
+                (*
+                // Determine if the prefixes differ, since we need to split
+                int prefix_diff = prefix_mismatch(n, key, key_len, depth);
+                if ((uint32_t)prefix_diff >= n->partial_len) {
+                    depth += n->partial_len;
+                    goto RECURSE_SEARCH;
+                }
+
+                // Create a new node
+                art_node4 *new_node = (art_node4* )alloc_node(NODE4);
+                *ref = (art_node* )new_node;
+                new_node->n.partial_len = prefix_diff;
+                memcpy(new_node->n.partial, n->partial, min(MAX_PREFIX_LEN, prefix_diff));
+
+                // Adjust the prefix of the old node
+                if (n->partial_len <= MAX_PREFIX_LEN) {
+                    add_child4(new_node, ref, n->partial[prefix_diff], n);
+                    n->partial_len -= (prefix_diff+1);
+                    memmove(n->partial, n->partial+prefix_diff+1,
+                            min(MAX_PREFIX_LEN, n->partial_len));
+                } else {
+                    n->partial_len -= (prefix_diff+1);
+                    art_leaf *l = minimum(n);
+                    add_child4(new_node, ref, l->key[depth+prefix_diff], n);
+                    memcpy(n->partial, l->key+depth+prefix_diff+1,
+                            min(MAX_PREFIX_LEN, n->partial_len));
+                }
+
+                // Insert the new leaf
+                art_leaf *l = make_leaf(key, key_len, value);
+                add_child4(new_node, ref, key[depth+prefix_diff], SET_LEAF(l));
+                return NULL;
+                
+                *)
+                null
+            else
+                null
+//                match branch.FindChild key.[depth] with
+//                | null ->
+//                    // No child, node goes within us
+//                    let leaf = leaf key value
+//                    //branch.AddChild(ref, key.[depth], leaf)
+//                    null
+//                | child -> insert child &child key value (depth+1) old
+                
+[<Struct>]
+type ArtEnumerator<'a> internal(root: ArtNode<'a>) =
+    interface IEnumerator<KeyValuePair<byte[], 'a>> with
+        member this.Current: KeyValuePair<byte[], 'a> = failwith "not implemented"
+        member this.Current: obj = failwith "not implemented"
+        member this.MoveNext() = failwith "not implemented"
+        member this.Reset() = failwith "not implemented"
+        member this.Dispose() = ()
+                
+
+/// Immutable Adaptive Radix Tree (ART), which can be treated like `Map<byte[], 'a>`.
 /// Major advantage is prefix-based lookup capability.
 type Art<'a> internal(count: int, root: ArtNode<'a>) =
     static member Empty: Art<'a> = Art<'a>(0, ArtNode.leaf [||] Unchecked.defaultof<_>)
@@ -204,27 +341,71 @@ type Art<'a> internal(count: int, root: ArtNode<'a>) =
         if count = 0 then raise (InvalidOperationException "Cannot return maximum key-value of empty prefix map")
         let leaf = (ArtNode.max root)
         (leaf.Key, leaf.Value)
-             
+        
+    member __.GetEnumerator() = new ArtEnumerator<'a>(root)
+    interface IEnumerable<KeyValuePair<byte[], 'a>> with
+        member this.GetEnumerator(): IEnumerator<KeyValuePair<byte[], 'a>> = upcast this.GetEnumerator()
+        member this.GetEnumerator(): System.Collections.IEnumerator = upcast this.GetEnumerator()
+        
+                 
 [<RequireQualifiedAccess>]
 module Art =
     
+    /// Returns a new empty Adaptive Radix Tree.
     let empty<'a> = Art<'a>.Empty
     
-    let inline min (map: Art<'a>) = map.Minimum
+    /// Checks if provided `map` is empty.
+    let inline isEmpty (map: Art<'a>): bool = map.Count = 0
     
-    let inline max (map: Art<'a>) = map.Maximum
+    /// Returns a number of entries stored in a given `map`.
+    let inline count (map: Art<'a>): int = map.Count
+    
+    /// Returns a minimum element of provided Adaptive Radix Tree.
+    /// Fails with exception if `map` is empty.
+    let inline min (map: Art<'a>): (byte[] * 'a) = map.Minimum
+    
+    /// Returns a maximum element of provided Adaptive Radix Tree.
+    /// Fails with exception if `map` is empty.
+    let inline max (map: Art<'a>): (byte[] * 'a) = map.Maximum
 
-    let ofSeq (seq: seq<string * 'a>): Art<'a> = failwith "not implemented"
+    /// Creates a new Adaptive Radix Tree out of provided tuple sequence.
+    let ofSeq (seq: seq<byte[] * 'a>): Art<'a> = failwith "not implemented"
     
-    let ofMap (map: #seq<KeyValuePair<string, 'a>>): Art<'a> = failwith "not implemented"
+    /// Creates a new Adaptive Radix Tree out of provided key-value sequence.
+    let ofMap (map: #seq<KeyValuePair<byte[], 'a>>): Art<'a> = failwith "not implemented"
     
-    let add (key: string) (value: 'a) (map: Art<'a>): Art<'a> = failwith "not implemented"
+    /// Inserts a new `value` under provided `key`, returning a new Adaptive Radix Tree in the result.
+    /// If there was already another value under the provided `key`, it will be overriden.
+    let add (key: ReadOnlySpan<byte>) (value: 'a) (map: Art<'a>): Art<'a> = failwith "not implemented"
     
-    let tryFind (key: string) (map: Art<'a>): 'a voption = failwith "not implemented"
+    /// Removes an entry for a provided `key` returning a new Adaptive Radix Tree without that element.
+    let remove (key: ReadOnlySpan<byte>) (map: Art<'a>): Art<'a> = failwith "not implemented"
     
-    let prefixed (prefix: string) (map: Art<'a>) = failwith "not implemented"
+    /// Inserts a new `value` under provided `key`, returning a new Adaptive Radix Tree in the result.
+    /// If there was already another value under the provided `key`, it will be overriden.
+    /// Unlike `Art.add`, this one takes byte array as a parameter and will not copy the key - it's up to
+    /// user to guarantee that `key` byte array will not be changed. 
+    let addUnsafe (key: byte[]) (value: 'a) (map: Art<'a>): Art<'a> = failwith "not implemented"
     
-    let map (fn: string -> 'a -> 'b) (map: Art<'a>) = failwith "not implemented"
+    /// Tries to find a a value under provided `key`.
+    let tryFind (key: ReadOnlySpan<byte>) (map: Art<'a>): 'a voption = failwith "not implemented"
     
-    let filter (fn: string -> 'a -> bool) (map: Art<'a>) = failwith "not implemented"
+    /// Returns a sequence of key-value elements, which starts with a given `prefix`.
+    let prefixed (prefix: byte[]) (map: Art<'a>): KeyValuePair<byte[], 'a> seq = failwith "not implemented"
+    
+    /// Maps all key-value entries of a given Adaptive Radix Tree into new values using function `fn`,
+    /// returning a new ART map with modified values.
+    let map (fn: byte[] -> 'a -> 'b) (map: Art<'a>): Art<'a> = failwith "not implemented"
+    
+    /// Filters all key-value entries of a given Adaptive Radix Tree into new values using predicate `fn`,
+    /// returning a new ART map with only these entries, which satisfied given predicate.
+    let filter (fn: byte[] -> 'a -> bool) (map: Art<'a>): Art<'a> = failwith "not implemented"
+    
+    /// Zips two maps together, combining the corresponding entries using provided function `fn`.
+    /// Any element that was not found in either of the maps, will be omitted from the output.
+    let intersect (fn: byte[] -> 'a -> 'b -> 'c) (a: Art<'a>) (b: Art<'b>): Art<'c> = failwith "not implemented"
+    
+    /// Combines two maps together, taking a union of their corresponding entries. If both maps have
+    /// a value for the corresponding entry, a function 'fn` will be used to resolve conflict.
+    let union (fn: byte[] -> 'a -> 'a -> 'a) (a: Art<'a>) (b: Art<'a>): Art<'a> = failwith "not implemented"
     
