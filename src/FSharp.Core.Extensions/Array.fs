@@ -41,7 +41,7 @@ let removeAt (index: int) (array: 'a[]): 'a[] =
         Array.blit array 0 copy 0 (index-1)
         Array.blit array index copy (index+1) (count-index)
         copy
-        
+         
 [<RequireQualifiedAccess>]
 module Simd =
 
@@ -51,12 +51,13 @@ module Simd =
         else
             let mutable result = true
             let mutable i = 0
-            let vectorizedLen = a.Length - Vector<'a>.Count
-            while result && i < vectorizedLen do
-                let va = Vector<'a>(a, i)
-                let vb = Vector<'a>(b, i)
-                result <- Vector.EqualsAll(va, vb)
-                i <- i + Vector<'a>.Count
+            if Vector.IsHardwareAccelerated then
+                let vectorizedLen = a.Length - Vector<'a>.Count
+                while result && i < vectorizedLen do
+                    let va = Vector<'a>(a, i)
+                    let vb = Vector<'a>(b, i)
+                    result <- Vector.EqualsAll(va, vb)
+                    i <- i + Vector<'a>.Count
             if result then    
                 while i < a.Length do
                     result <- a.[i] = b.[i]

@@ -18,21 +18,31 @@ namespace FSharp.Core
 
 open System
 open System
+open System
+open System
 open System.Numerics
 open System.Collections.Generic
 open System.Runtime.CompilerServices
-open System.Runtime.CompilerServices
 open System.Runtime.InteropServices
 open System.Runtime.Intrinsics
+open System.Runtime.Intrinsics.X86
+open System.Text
+
+#nowarn "9"
 
 module internal ArtConst =
-    let [<Literal>] S = 4
-    let [<Literal>] M = 16
-    let [<Literal>] L = 48
-    let [<Literal>] XL = 256
-    let [<Literal>] MaxPrefixLength = 10
+    let [<Literal>] Node4Size  = 4    // 0b00000000_00000100
+    let [<Literal>] Node16Size  = 16   // 0b00000000_00010000
+    let [<Literal>] Node48Size  = 48   // 0b00000000_00110000
+    let [<Literal>] Node256Size = 256  // 0b00000001_00000000
+    let [<Literal>] Node256 = 0b10000000_00000000
+    let [<Literal>] Node48  = 0b01000000_00000000
+    let [<Literal>] Node16  = 0b00100000_00000000
+    let [<Literal>] Node4   = 0b00010000_00000000
+    let [<Literal>] NodeMask   = 0b11111110_00000000
     
-    let trailingZeros (x: int): int =
+    /// Equivalent of C's __builtin_ctz
+    let ctz (x: int): int =
         if x = 0 then 32
         else
             let mutable i = x
@@ -44,59 +54,73 @@ module internal ArtConst =
             y <- i <<< 2; if y <> 0 then n <- n - 2; i <- y
             n - ((i <<< 1) >>> 31)
     
-[<Flags>]
-type NodeFlags =
-    | None = 0uy
-    | N4   = 1uy
-    | N16  = 2uy
-    | N48  = 3uy
-    | N256 = 4uy
-    | Leaf = 8uy
-    
+    /// Equivalent of C's memmove 
+    let memmove (array: 'a[]) (index: int) (count: int) =
+        let mutable i = index + count
+        let mutable j = index
+        while i > index do
+            array.[i] <- array.[j]
+            i <- i - 1
+            j <- j - 1
+            
+    let utf8 (s: string): ArraySegment<byte> =
+        let array = Encoding.UTF8.GetBytes(s)
+        ArraySegment<_>(array, 0, array.Length)
+        
 [<AbstractClass;AllowNullLiteral>]
-type internal ArtNode<'a>(flags: NodeFlags) =
-    member __.Flags = flags
-    member __.IsLeaf = flags.HasFlag(NodeFlags.Leaf)
+type internal ArtNode<'a>() =
+    member this.IsLeaf: bool = this :? ArtLeaf<'a>
 
-and [<Sealed>] internal ArtLeaf<'a>(key: string, value: 'a) =
-    inherit ArtNode<'a>(NodeFlags.Leaf)
-    member inline __.Key = key
-    member inline __.Value = value
-    member inline __.IsMatch(s: string) = s = key
-    member __.LongestCommonPrefix(other: ArtLeaf<'a>, depth: int) =
-        let rec loop (a: string) (b: string) maxCmp depth i=
+and [<Sealed>] internal ArtLeaf<'a>(byteKey: byte[], key: string, value: 'a) as this =
+    inherit ArtNode<'a>()
+    [<DefaultValue(false)>] val mutable byteKey: byte[]
+    [<DefaultValue(false)>] val mutable key: string
+    [<DefaultValue(false)>] val mutable value: 'a
+    do
+        this.byteKey <- byteKey
+        this.key <- key
+        this.value <- value
+    member inline this.IsMatch(s: string) = this.key = s
+    member this.LongestCommonPrefix(other: ArtLeaf<'a>, depth: int) =
+        let rec loop (a: byte[]) (b: byte[]) maxCmp depth i=
             if i < maxCmp then
                 if a.[i] <> b.[i + depth] then i
                 else loop a b maxCmp depth (i+1)
             else i
-        let maxCmp = Math.Max(key.Length, other.Key.Length) - depth
-        loop key other.Key maxCmp depth 0
+        let maxCmp = Math.Max(this.byteKey.Length, other.key.Length) - depth
+        loop this.byteKey other.byteKey maxCmp depth 0
     
-and [<Sealed>] internal ArtBranch<'a>(flags: NodeFlags, childrenCount: byte, partialLength:int, partial:byte[], keys:byte[], children:ArtNode<'a>[]) =
-    inherit ArtNode<'a>(flags)
-    
-    member inline __.ChildrenCount = childrenCount
-    member inline __.PartialLength = partialLength
+and [<Sealed;AllowNullLiteral>] internal ArtBranch<'a>(flags: int, count: int, partial: ArraySegment<byte>, keys:byte[], children:ArtNode<'a>[]) as this =
+    inherit ArtNode<'a>()
+    [<DefaultValue(false)>] val mutable childCount: int
+    do
+        this.childCount <- count
+    member inline __.ChildrenCount
+        with get() = this.childCount
+        and set(value) = this.childCount <- value
+    member inline __.Type = flags
+    member inline __.PartialLength = partial.Count
     member inline __.Partial = partial
     member inline __.Keys = keys
     member inline __.Children = children
     
     member this.FindChild(c: byte): ArtNode<'a> =
-        match flags with
-        | NodeFlags.N4 ->
+        let childrenCount = this.ChildrenCount
+        match this.Type with
+        | ArtConst.Node4 ->
             let rec loop i =
                 if i >= int childrenCount then null
                 elif keys.[i] = c then children.[i]
                 else loop (i+1)
             loop 0
-        | NodeFlags.N16 ->
+        | ArtConst.Node16 ->
             let bitfield =
                 if Vector.IsHardwareAccelerated then
                     // compare all 16 keys at once using SIMD registers
                     let v1 = Vector128.Create(c)
-                    let v2 = Vector128.Create(keys.[0], keys.[1], keys.[2], keys.[3], keys.[4], keys.[5], keys.[6], keys.[7], keys.[8],
-                                              keys.[9], keys.[10], keys.[11], keys.[12], keys.[13], keys.[14], keys.[15])
-                    let cmp = System.Runtime.Intrinsics.X86.Aes.CompareEqual(v1, v2)
+                    use k = fixed keys
+                    let v2 = Aes.LoadVector128 k
+                    let cmp = Aes.CompareEqual(v1, v2)
                     let mask = (1 <<< int childrenCount) - 1
                     System.Runtime.Intrinsics.X86.Aes.MoveMask(cmp) &&& mask
                 else
@@ -106,17 +130,17 @@ and [<Sealed>] internal ArtBranch<'a>(flags: NodeFlags, childrenCount: byte, par
                         if keys.[i] = c then  bitfield <- bitfield ||| (1 <<< i)
                     let mask = (1 <<< int childrenCount) - 1
                     bitfield &&& mask
-            if bitfield <> 0 then children.[ArtConst.trailingZeros bitfield] else null
-        | NodeFlags.N48 ->
+            if bitfield <> 0 then children.[ArtConst.ctz bitfield] else null
+        | ArtConst.Node48 ->
             let i = int keys.[int c]
             if i <> 0 then children.[i-1] else null
-        | NodeFlags.N256 ->
+        | ArtConst.Node256 ->
             children.[int c]
         | _ -> raise (NotSupportedException "Flag type not supported for ArtNode")
         
     /// Returns a number of prefix bytes shared between given `key` and this node.
-    member this.PrefixLength(key: ReadOnlySpan<byte>, depth: int): int =
-        let len = Math.Min(Math.Min(partialLength, ArtConst.MaxPrefixLength), (key.Length - depth))
+    member this.PrefixLength(key: byte[], depth: int): int =
+        let len = Math.Min(this.PartialLength, (key.Length - depth))
         let mutable i = 0
         let mutable cont = true
         while cont && i < len do
@@ -124,173 +148,205 @@ and [<Sealed>] internal ArtBranch<'a>(flags: NodeFlags, childrenCount: byte, par
                 cont <- false
             i <- i + 1
         i
+        
+    member this.AddChildUnsafe() = ()
 
         
 [<RequireQualifiedAccess>]
 module internal ArtNode =
     
-    let inline leaf key value = ArtLeaf<_>(key, value)
+    let inline leaf key byteKey value =
+        ArtLeaf<'a>(byteKey, key, value)
     
-    let inline node4 count partialLen = ArtBranch<_>(NodeFlags.N4, count, partialLen, Array.zeroCreate ArtConst.MaxPrefixLength, Array.zeroCreate ArtConst.S, Array.zeroCreate ArtConst.S)
+    let inline node4 partial = ArtBranch<_>(ArtConst.Node4, 0, partial, Array.zeroCreate ArtConst.Node4Size, Array.zeroCreate ArtConst.Node4Size)
     
-    let inline node16 count partialLen = ArtBranch<_>(NodeFlags.N16, count, partialLen, Array.zeroCreate ArtConst.MaxPrefixLength, Array.zeroCreate ArtConst.S, Array.zeroCreate ArtConst.S)
+    let inline node16 count partial keys children =
+        let keys' = Array.zeroCreate ArtConst.Node16Size
+        let children' = Array.zeroCreate ArtConst.Node16Size
+        Array.blit keys 0 keys' 0 count
+        Array.blit children 0 children' 0 count
+        ArtBranch<_>(ArtConst.Node16, count, partial, keys', children')
     
-    let inline node48 count partialLen = ArtBranch<_>(NodeFlags.N48, count, partialLen, Array.zeroCreate ArtConst.MaxPrefixLength, Array.zeroCreate ArtConst.S, Array.zeroCreate ArtConst.S)
+    let inline node48 count partial keys children =
+        let keys' = Array.zeroCreate 256 // yes, 256 keys
+        let children' = Array.zeroCreate ArtConst.Node48Size
+        Array.blit keys 0 keys' 0 count
+        Array.blit children 0 children' 0 count
+        ArtBranch<_>(ArtConst.Node48, count, partial, keys', children')
     
-    let inline node256 count partialLen = ArtBranch<_>(NodeFlags.N256, count, partialLen, Array.zeroCreate ArtConst.MaxPrefixLength, Array.zeroCreate ArtConst.S, Array.zeroCreate ArtConst.S)
+    let inline node256 count partial keys children =
+        let children' = Array.zeroCreate ArtConst.Node256Size
+        Array.blit children 0 children' 0 count
+        ArtBranch<_>(ArtConst.Node256, count, partial, [||], children')
     
     let rec min (n: ArtNode<'a>) =
-        match n.Flags with
-        | NodeFlags.Leaf -> n :?> ArtLeaf<'a>
-        | NodeFlags.N4 | NodeFlags.N16 -> min (n :?> ArtBranch<'a>).Children.[0]
-        | NodeFlags.N48 ->
-            let branch = n :?> ArtBranch<'a>
-            let mutable i = 0
-            while branch.Keys.[i] <> 0uy do i <- i + 1
-            i <- int (branch.Keys.[i] - 1uy)
-            min branch.Children.[i]
-        | NodeFlags.N256 ->
-            let branch = n :?> ArtBranch<'a>
-            let mutable i = 0
-            while branch.Keys.[i] <> 0uy do i <- i + 1
-            min branch.Children.[i]
+        match n with
+        | :? ArtLeaf<'a> as leaf -> leaf
+        | :? ArtBranch<'a> as branch ->
+            match branch.Type with
+            | ArtConst.Node4 | ArtConst.Node16 -> min branch.Children.[0]
+            | ArtConst.Node48 ->
+                let mutable i = 0
+                while branch.Keys.[i] <> 0uy do i <- i + 1
+                i <- int (branch.Keys.[i] - 1uy)
+                min branch.Children.[i]
+            | ArtConst.Node256 ->
+                let mutable i = 0
+                while branch.Keys.[i] <> 0uy do i <- i + 1
+                min branch.Children.[i]
+            | _ -> failwith "not supported"
         | _ -> failwith "not supported"
     
     let rec max (n: ArtNode<'a>) =
-        match n.Flags with
-        | NodeFlags.Leaf -> n :?> ArtLeaf<'a>
-        | NodeFlags.N4 | NodeFlags.N16 ->
-            let branch = (n :?> ArtBranch<'a>)
-            min branch.Children.[int branch.ChildrenCount - 1]
-        | NodeFlags.N48 ->
-            let branch = n :?> ArtBranch<'a>
-            let mutable i = 255
-            while branch.Keys.[i] <> 0uy do i <- i - 1
-            i <- int (branch.Keys.[i] - 1uy)
-            max branch.Children.[i]
-        | NodeFlags.N256 ->
-            let branch = n :?> ArtBranch<'a>
-            let mutable i = 255
-            while branch.Keys.[i] <> 0uy do i <- i - 1
-            max branch.Children.[i]
+        match n with
+        | :? ArtLeaf<'a> as leaf -> leaf
+        | :? ArtBranch<'a> as branch ->
+            match branch.Type with
+            | ArtConst.Node4 | ArtConst.Node16 ->
+                min branch.Children.[int branch.ChildrenCount - 1]
+            | ArtConst.Node48 ->
+                let mutable i = 47
+                while branch.Keys.[i] = 0uy do i <- i - 1
+                i <- int (branch.Keys.[i] - 1uy)
+                max branch.Children.[i]
+            | ArtConst.Node256 ->
+                let mutable i = 255
+                while branch.Keys.[i] = 0uy do i <- i - 1
+                max branch.Children.[i]
+            | _ -> failwith "not supported"
         | _ -> failwith "not supported"
         
     /// Calculates the index at which the prefixes mismatch   
-    let prefixMismatch(key: ReadOnlySpan<byte>) (depth: int) (n: ArtBranch<'a>) =
-        let mutable len = Math.Min(Math.Min(n.PartialLength, ArtConst.MaxPrefixLength), (key.Length - depth))
+    let prefixMismatch(key: ArraySegment<byte>) (depth: int) (n: ArtBranch<'a>) =
+        let mutable len = Math.Min(n.PartialLength, (key.Count - depth))
         let mutable idx = -1
         let mutable i = 0
         while idx = -1 && i < len do
             if n.Partial.[i] <> key.[depth + i] then
                 idx <- i
             i <- i + 1
+        idx
         
-        if idx <> -1 then idx
-        elif n.PartialLength > ArtConst.MaxPrefixLength then
-            // If the prefix is short we can avoid finding a leaf
-            let leaf = min n
-            let maxCmp = Math.Min(leaf.Key.Length, key.Length) - depth
-            while idx = -1 && i < maxCmp do
-                if leaf.Key.[depth + i] <> key.[depth + i] then
-                    idx <- i
-                i <- i + 1
-            idx
-        else -1
+    let inline private addUnsafe256 (n: ArtBranch<'a>) (c: byte) (child: ArtNode<'a>): ArtNode<'a> =
+        n.ChildrenCount <- n.ChildrenCount + 1
+        n.Children.[int c] <- child
+        upcast n
         
-    let rec insert (n: ArtNode<'a>) (ref: ArtNode<'a> outref) (key: byte[]) (value: 'a) (depth: int) (old: int outref) =
+    let private addUnsafe48 (n: ArtBranch<'a>) (c: byte) (child: ArtNode<'a>): ArtNode<'a> =
+        if n.ChildrenCount < 48 then
+            let mutable pos = 0
+            while not (isNull n.Children.[pos]) do pos <- pos + 1
+            n.Children.[pos] <- child
+            n.Keys.[int c] <- byte (pos + 1)
+            n.ChildrenCount <- n.ChildrenCount + 1
+            upcast n
+        else
+            let node' = node256 n.ChildrenCount n.Partial n.Keys n.Children
+            addUnsafe256 node' c child
+        
+    let private addUnsafe16 (n: ArtBranch<'a>) (c: byte) (child: ArtNode<'a>): ArtNode<'a> =
+        if n.ChildrenCount < 16 then
+            let mask = (1uy <<< n.ChildrenCount) - 1uy;
+            let bitfield =
+                if Vector.IsHardwareAccelerated then
+                    // compare all 16 keys at once using SIMD registers
+                    let v1 = Vector128.Create(c)
+                    use k = fixed n.Keys
+                    let v2 = Aes.LoadVector128 k
+                    let cmp = Aes.CompareEqual(v1, v2)
+                    let mask = (1 <<< n.ChildrenCount) - 1
+                    Aes.MoveMask(cmp) &&& mask
+                else
+                    // fallback to native comparison
+                    let mutable bitfield = 0
+                    for i = 0 to 15 do
+                        if n.Keys.[i] = c then  bitfield <- bitfield ||| (1 <<< i)
+                    let mask = (1 <<< n.ChildrenCount) - 1
+                    bitfield &&& mask
+            let idx =
+                if bitfield = 0 then n.ChildrenCount
+                else
+                    let i = ArtConst.ctz bitfield
+                    ArtConst.memmove n.Keys (i+1) (n.ChildrenCount-i)
+                    ArtConst.memmove n.Children (i+1) (n.ChildrenCount-i)
+                    i
+                    
+            n.Keys.[idx] <- c;
+            n.Children.[idx] <- child
+            n.ChildrenCount <- n.ChildrenCount + 1
+            upcast n
+        else
+            let node' = node48 n.ChildrenCount n.Partial n.Keys n.Children
+            addUnsafe48 node' c child
+        
+    let private addUnsafe4 (n: ArtBranch<'a>) (c: byte) (child: ArtNode<'a>): ArtNode<'a> =
+        if n.ChildrenCount < 4 then
+            let idx =
+                if c < n.Keys.[0] then 0
+                elif c < n.Keys.[1] then 0
+                else 3
+            // Shift to make space -> this should be memmove
+            ArtConst.memmove n.Keys (idx+1) (n.ChildrenCount-idx)
+            ArtConst.memmove n.Children (idx+1) (n.ChildrenCount-idx)
+            // Insert element
+            n.Keys.[idx] <- c
+            n.Children.[idx] <- child
+            n.ChildrenCount <- n.ChildrenCount + 1
+            upcast n
+        else
+            let node' = node16 n.ChildrenCount n.Partial n.Keys n.Children
+            addUnsafe16 node' c child
+            
+    let private addUnsafe (n: ArtBranch<'a>) (c: byte) (child: ArtNode<'a>): ArtNode<'a> =
+        match n.Type with
+        | ArtConst.Node4   -> addUnsafe4 n c child
+        | ArtConst.Node16  -> addUnsafe16 n c child
+        | ArtConst.Node48  -> addUnsafe48 n c child
+        | ArtConst.Node256 -> addUnsafe256 n c child
+        | _ -> null
+                    
+    let rec private recursiveInsert (n: ArtNode<'a>) (ref: ArtNode<'a> outref) (key: string) (byteKey: byte[]) (value: 'a) (depth: int) =
         // If we are at a NULL node, inject a leaf
         if isNull n then
-            ref <- leaf key value
+            ref <- leaf key byteKey value
             null
         elif n.IsLeaf then
             let l = n :?> ArtLeaf<'a>
             // Check if we are updating an existing value
-            if l.IsMatch(ReadOnlySpan<_>(key)) then
+            if l.IsMatch(key) then
                 // replace existing key
-                null
+                ref <- leaf key byteKey value
             else
                 // New value, we must split the leaf into a node4
-                let leaf' = leaf key value
-                let longestPrefix = l.LongestCommonPrefix(leaf', depth)
-                null
-                
-            (*
-            art_leaf *l = LEAF_RAW(n);
-
-            // Check if we are updating an existing value
-            if (!leaf_matches(l, key, key_len, depth)) {
-                *old = 1;
-                void *old_val = l->value;
-                l->value = value;
-                return old_val;
-            }
-
-            // New value, we must split the leaf into a node4
-            art_node4 *new_node = (art_node4* )alloc_node(NODE4);
-
-            // Create a new leaf
-            art_leaf *l2 = make_leaf(key, key_len, value);
-
-            // Determine longest prefix
-            int longest_prefix = longest_common_prefix(l, l2, depth);
-            new_node->n.partial_len = longest_prefix;
-            memcpy(new_node->n.partial, key+depth, min(MAX_PREFIX_LEN, longest_prefix));
-            // Add the leafs to the new node4
-            *ref = (art_node* )new_node;
-            add_child4(new_node, ref, l->key[depth+longest_prefix], SET_LEAF(l));
-            add_child4(new_node, ref, l2->key[depth+longest_prefix], SET_LEAF(l2));
-            return NULL;            
-            *)
+                let l2 = leaf key byteKey value
+                let longestPrefix = l.LongestCommonPrefix(l2, depth)
+                let segment = ArraySegment<byte>(l2.byteKey, depth, longestPrefix)
+                let node = node4 segment
+                addUnsafe4 node l.byteKey.[depth+longestPrefix] l |> ignore
+                addUnsafe4 node l2.byteKey.[depth+longestPrefix] l2 |> ignore
+                ref <- node
             null
         else
             let branch = n :?> ArtBranch<'a>
             // Check if given node has a prefix
-            if branch.PartialLength <> 0 then
-                let prefixDiff = prefixMismatch (ReadOnlySpan<_> key) depth branch
-                (*
+            let prefixDiff = prefixMismatch (ArraySegment<_>(byteKey, 0, byteKey.Length)) depth branch
+            if prefixDiff < branch.PartialLength then
                 // Determine if the prefixes differ, since we need to split
-                int prefix_diff = prefix_mismatch(n, key, key_len, depth);
-                if ((uint32_t)prefix_diff >= n->partial_len) {
-                    depth += n->partial_len;
-                    goto RECURSE_SEARCH;
-                }
-
-                // Create a new node
-                art_node4 *new_node = (art_node4* )alloc_node(NODE4);
-                *ref = (art_node* )new_node;
-                new_node->n.partial_len = prefix_diff;
-                memcpy(new_node->n.partial, n->partial, min(MAX_PREFIX_LEN, prefix_diff));
-
-                // Adjust the prefix of the old node
-                if (n->partial_len <= MAX_PREFIX_LEN) {
-                    add_child4(new_node, ref, n->partial[prefix_diff], n);
-                    n->partial_len -= (prefix_diff+1);
-                    memmove(n->partial, n->partial+prefix_diff+1,
-                            min(MAX_PREFIX_LEN, n->partial_len));
-                } else {
-                    n->partial_len -= (prefix_diff+1);
-                    art_leaf *l = minimum(n);
-                    add_child4(new_node, ref, l->key[depth+prefix_diff], n);
-                    memcpy(n->partial, l->key+depth+prefix_diff+1,
-                            min(MAX_PREFIX_LEN, n->partial_len));
-                }
-
+                let node' = node4 (ArraySegment(byteKey, branch.Partial.Offset, prefixDiff))
+                addUnsafe4 node' branch.Partial.[prefixDiff] branch |> ignore
+                branch.Partial <- ArraySegment<_>(branch.Partial.Array, branch.Partial.Offset, branch.Partial.Count - preffixDiff + 1)
+                ArtConst.memmove branch.Partial.Array branch.Partial.Offset (prefixDiff + 1)
                 // Insert the new leaf
-                art_leaf *l = make_leaf(key, key_len, value);
-                add_child4(new_node, ref, key[depth+prefix_diff], SET_LEAF(l));
-                return NULL;
-                
-                *)
+                let leaf = leaf key byteKey value
+                addUnsafe4 node' byteKey.[depth+prefixDiff] leaf |> ignore
                 null
             else
-                null
-//                match branch.FindChild key.[depth] with
-//                | null ->
-//                    // No child, node goes within us
-//                    let leaf = leaf key value
-//                    //branch.AddChild(ref, key.[depth], leaf)
-//                    null
-//                | child -> insert child &child key value (depth+1) old
+                match branch.FindChild byteKey.[depth+branch.PartialLength] with
+                | null ->
+                    // No child, node goes within us
+                    let leaf = leaf key byteKey value
+                    addUnsafe branch byteKey.[depth+branch.PartialLength] leaf
+                | child -> recursiveInsert child &child key byteKey value (depth+branch.PartialLength+1)
                 
 [<IsByRefLike;Struct>]
 type ArtEnumerator<'a> internal(root: ArtNode<'a>) =
@@ -307,10 +363,10 @@ type ArtEnumerator<'a> internal(root: ArtNode<'a>) =
 /// Immutable Adaptive Radix Tree (ART), which can be treated like `Map<byte[], 'a>`.
 /// Major advantage is prefix-based lookup capability.
 type Art<'a> internal(count: int, root: ArtNode<'a>) =
-    static member Empty: Art<'a> = Art<'a>(0, ArtNode.leaf "" Unchecked.defaultof<_>)
+    static member Empty: Art<'a> = Art<'a>(0, ArtNode.leaf "" [||] Unchecked.defaultof<_>)
     member this.Count = count
     member this.Search(phrase: string) =
-        let key = phrase.AsSpan()
+        let byteKey = Encoding.UTF8.GetBytes phrase
         let mutable n = root
         let mutable depth = 0
         let mutable result = ValueNone
@@ -319,32 +375,32 @@ type Art<'a> internal(count: int, root: ArtNode<'a>) =
                 let leaf = n :?> ArtLeaf<'a>
                 // Check if the expanded path matches
                 if leaf.IsMatch phrase then
-                    result <- ValueSome leaf.Value
+                    result <- ValueSome leaf.value
                 n <- null
             else
                 let branch = n :?> ArtBranch<'a>
                 // Bail if the prefix does not match
                 if branch.PartialLength > 0 then
-                    let prefixLen = branch.PrefixLength(key, depth)
-                    if prefixLen <> Math.Min(ArtConst.MaxPrefixLength, branch.PartialLength) then
+                    let prefixLen = branch.PrefixLength(byteKey, depth)
+                    if prefixLen <> branch.PartialLength then
                         n <- null
                     depth <- depth + branch.PartialLength
-                if depth >= key.Length then
+                if depth >= byteKey.Length then
                     n <- null
                 // Recursively search
-                n <- branch.FindChild(key.[depth])
+                n <- branch.FindChild(byteKey.[depth])
                 depth <- depth + 1
         result
         
     member __.Minimum =
         if count = 0 then raise (InvalidOperationException "Cannot return minimum key-value of empty prefix map")
         let leaf = (ArtNode.min root)
-        (leaf.Key, leaf.Value)
+        (leaf.key, leaf.value)
         
     member __.Maximum = 
         if count = 0 then raise (InvalidOperationException "Cannot return maximum key-value of empty prefix map")
         let leaf = (ArtNode.max root)
-        (leaf.Key, leaf.Value)
+        (leaf.key, leaf.value)
         
     member __.GetEnumerator() = new ArtEnumerator<'a>(root)
     interface IEnumerable<KeyValuePair<string, 'a>> with
