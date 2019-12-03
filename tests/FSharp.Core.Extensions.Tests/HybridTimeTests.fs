@@ -24,10 +24,6 @@ open System
 open FSharp.Core
 open Expecto
 open Expecto.Logging
-open FSharp.Core
-open FSharp.Core
-open FSharp.Core
-open FSharp.Core
 
 [<Tests>]
 let tests =

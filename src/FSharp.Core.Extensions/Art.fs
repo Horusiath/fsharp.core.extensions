@@ -305,48 +305,48 @@ module internal ArtNode =
         | ArtConst.Node256 -> addUnsafe256 n c child
         | _ -> null
                     
-    let rec private recursiveInsert (n: ArtNode<'a>) (ref: ArtNode<'a> outref) (key: string) (byteKey: byte[]) (value: 'a) (depth: int) =
-        // If we are at a NULL node, inject a leaf
-        if isNull n then
-            ref <- leaf key byteKey value
-            null
-        elif n.IsLeaf then
-            let l = n :?> ArtLeaf<'a>
-            // Check if we are updating an existing value
-            if l.IsMatch(key) then
-                // replace existing key
-                ref <- leaf key byteKey value
-            else
-                // New value, we must split the leaf into a node4
-                let l2 = leaf key byteKey value
-                let longestPrefix = l.LongestCommonPrefix(l2, depth)
-                let segment = ArraySegment<byte>(l2.byteKey, depth, longestPrefix)
-                let node = node4 segment
-                addUnsafe4 node l.byteKey.[depth+longestPrefix] l |> ignore
-                addUnsafe4 node l2.byteKey.[depth+longestPrefix] l2 |> ignore
-                ref <- node
-            null
-        else
-            let branch = n :?> ArtBranch<'a>
-            // Check if given node has a prefix
-            let prefixDiff = prefixMismatch (ArraySegment<_>(byteKey, 0, byteKey.Length)) depth branch
-            if prefixDiff < branch.PartialLength then
-                // Determine if the prefixes differ, since we need to split
-                let node' = node4 (ArraySegment(byteKey, branch.Partial.Offset, prefixDiff))
-                addUnsafe4 node' branch.Partial.[prefixDiff] branch |> ignore
-                branch.Partial <- ArraySegment<_>(branch.Partial.Array, branch.Partial.Offset, branch.Partial.Count - preffixDiff + 1)
-                ArtConst.memmove branch.Partial.Array branch.Partial.Offset (prefixDiff + 1)
-                // Insert the new leaf
-                let leaf = leaf key byteKey value
-                addUnsafe4 node' byteKey.[depth+prefixDiff] leaf |> ignore
-                null
-            else
-                match branch.FindChild byteKey.[depth+branch.PartialLength] with
-                | null ->
-                    // No child, node goes within us
-                    let leaf = leaf key byteKey value
-                    addUnsafe branch byteKey.[depth+branch.PartialLength] leaf
-                | child -> recursiveInsert child &child key byteKey value (depth+branch.PartialLength+1)
+    //let rec private recursiveInsert (n: ArtNode<'a>) (ref: ArtNode<'a> byref) (key: string) (byteKey: byte[]) (value: 'a) (depth: int) =
+    //    // If we are at a NULL node, inject a leaf
+    //    if isNull n then
+    //        ref <- leaf key byteKey value
+    //        null
+    //    elif n.IsLeaf then
+    //        let l = n :?> ArtLeaf<'a>
+    //        // Check if we are updating an existing value
+    //        if l.IsMatch(key) then
+    //            // replace existing key
+    //            ref <- leaf key byteKey value
+    //        else
+    //            // New value, we must split the leaf into a node4
+    //            let l2 = leaf key byteKey value
+    //            let longestPrefix = l.LongestCommonPrefix(l2, depth)
+    //            let segment = ArraySegment<byte>(l2.byteKey, depth, longestPrefix)
+    //            let node = node4 segment
+    //            addUnsafe4 node l.byteKey.[depth+longestPrefix] l |> ignore
+    //            addUnsafe4 node l2.byteKey.[depth+longestPrefix] l2 |> ignore
+    //            ref <- node
+    //        null
+    //    else
+    //        let branch = n :?> ArtBranch<'a>
+    //        // Check if given node has a prefix
+    //        let prefixDiff = prefixMismatch (ArraySegment<_>(byteKey, 0, byteKey.Length)) depth branch
+    //        if prefixDiff < branch.PartialLength then
+    //            // Determine if the prefixes differ, since we need to split
+    //            let node' = node4 (ArraySegment(byteKey, branch.Partial.Offset, prefixDiff))
+    //            addUnsafe4 node' branch.Partial.[prefixDiff] branch |> ignore
+    //            branch.Partial <- ArraySegment<_>(branch.Partial.Array, branch.Partial.Offset, branch.Partial.Count - preffixDiff + 1)
+    //            ArtConst.memmove branch.Partial.Array branch.Partial.Offset (prefixDiff + 1)
+    //            // Insert the new leaf
+    //            let leaf = leaf key byteKey value
+    //            addUnsafe4 node' byteKey.[depth+prefixDiff] leaf |> ignore
+    //            null
+    //        else
+    //            match branch.FindChild byteKey.[depth+branch.PartialLength] with
+    //            | null ->
+    //                // No child, node goes within us
+    //                let leaf = leaf key byteKey value
+    //                addUnsafe branch byteKey.[depth+branch.PartialLength] leaf
+    //            | child -> recursiveInsert child &child key byteKey value (depth+branch.PartialLength+1)
                 
 [<IsByRefLike;Struct>]
 type ArtEnumerator<'a> internal(root: ArtNode<'a>) =
@@ -355,7 +355,9 @@ type ArtEnumerator<'a> internal(root: ArtNode<'a>) =
     interface IEnumerator<KeyValuePair<string, 'a>> with
         member this.Current: KeyValuePair<string, 'a> = this.Current
         member this.Current: obj = upcast this.Current
-        member this.MoveNext(): bool = this.MoveNext()
+        member this.MoveNext(): bool =
+            let mutable x = this
+            x.MoveNext()
         member this.Reset() = failwith "not implemented"
         member this.Dispose() = ()
                 
@@ -403,9 +405,9 @@ type Art<'a> internal(count: int, root: ArtNode<'a>) =
         (leaf.key, leaf.value)
         
     member __.GetEnumerator() = new ArtEnumerator<'a>(root)
-    interface IEnumerable<KeyValuePair<string, 'a>> with
-        member this.GetEnumerator(): IEnumerator<KeyValuePair<string, 'a>> = upcast this.GetEnumerator()
-        member this.GetEnumerator(): System.Collections.IEnumerator = upcast this.GetEnumerator()
+    //interface IEnumerable<KeyValuePair<string, 'a>> with
+    //    member this.GetEnumerator(): IEnumerator<KeyValuePair<string, 'a>> = upcast this.GetEnumerator()
+    //    member this.GetEnumerator(): System.Collections.IEnumerator = upcast this.GetEnumerator()
         
                  
 [<RequireQualifiedAccess>]

@@ -13,7 +13,7 @@
     <Compile Include="HybridTime.fs" />
     <Compile Include="Enum.fs" />
     <Compile Include="Vec.fs" />
-    <Compile Include="Lru.fs" />
+    <Compile Include="Arc.fs" />
     <Compile Include="Art.fs" />
     <Compile Include="Random.fs" />
     <Content Include="paket.references" />

@@ -1,4 +1,4 @@
-namespace FSharp.Core.Extensions
+namespace FSharp.Core
 
 open FSharp.Control.Tasks.Builders
 open System.Collections.Generic
@@ -6,6 +6,7 @@ open System.Runtime.ExceptionServices
 open System.Threading.Tasks
 open System.Threading
 open System
+open System.Threading.Channels
 
 type AsyncSeq<'a> = IAsyncEnumerable<'a>
 
@@ -22,6 +23,23 @@ module AsyncSeq =
         { new AsyncSeq<'a> with
             member __.GetAsyncEnumerator _ = aseq.GetAsyncEnumerator(cancel) }
         
+    /// Returns a task, which will pull all incoming elements from a given sequence
+    /// or until token has cancelled, and pushes them to a given channel writer.
+    let into (c: CancellationToken) (chan: ChannelWriter<'a>) (aseq: AsyncSeq<'a>) = vtask {
+            let e = aseq.GetAsyncEnumerator(c)
+            try
+                let! hasNext = e.MoveNextAsync()
+                let mutable hasNext' = hasNext
+                while hasNext' do
+                    do! chan.WriteAsync(e.Current, c)
+                    let! hasNext = e.MoveNextAsync()
+                    hasNext' <- hasNext
+                do! e.DisposeAsync()
+                do chan.Complete()
+            with ex ->
+                do! e.DisposeAsync()
+                return rethrow ex }
+            
     /// Tries to return the first element of the async sequence,
     /// returning None if sequence is empty or cancellation was called.
     let tryHead (cancel: CancellationToken) (aseq: AsyncSeq<'a>) = vtask {
@@ -61,6 +79,25 @@ module AsyncSeq =
                 do! e.DisposeAsync()
                 return rethrow ex
     } 
+
+    /// Collects all of the incoming events into a single sequence, which is then
+    /// returned, once async sequence completes.
+    let collect (aseq: AsyncSeq<'a>): ValueTask<'a seq> = vtask {
+        let e = aseq.GetAsyncEnumerator()
+        try
+            let! hasNext = e.MoveNextAsync()
+            let mutable hasNext' = hasNext
+            let mutable result = ResizeArray<_>()
+            while hasNext' do
+                result.Add (e.Current)
+                let! hasNext = e.MoveNextAsync()
+                hasNext' <- hasNext
+            do! e.DisposeAsync()
+            return upcast result
+        with ex ->
+            do! e.DisposeAsync()
+            return rethrow ex
+    }
     
     /// Asynchronously folds over incoming elements, continuously constructing
     /// the output state (starting from provided seed) and returning it eventually
@@ -184,11 +221,30 @@ module AsyncSeq =
     /// which have not satisfied given predicate.
     let filter (f: 'a -> bool) (aseq: AsyncSeq<'a>): AsyncSeq<'a> =
         choose (fun a -> if f a then ValueTask<_>(Some a) else ValueTask<_> None) aseq
+
+    /// Merges a collection of async sequences together, emitting output of each one of them
+    /// (obtained in parallel) as an input of result async sequence. Returned sequence will
+    /// complete once all of the merged sequences will complete, and fail when any of the 
+    /// underlying sequences fails.
+    let mergeParallel (sequences: AsyncSeq<'a>[]): AsyncSeq<'a> = 
+        { new AsyncSeq<'a> with
+            member __.GetAsyncEnumerator (cancel) =
+                let enums = sequences |> Array.map (fun s -> s.GetAsyncEnumerator(cancel))
+                let mutable current = Unchecked.defaultof<_>
+                { new IAsyncEnumerator<'a> with
+                    member __.Current = current
+                    member __.DisposeAsync() = unitVtask {
+                        let tasks = enums |> Array.map (fun e -> e.DisposeAsync().AsTask())
+                        do! Task.WhenAll tasks
+                    }
+                    member __.MoveNextAsync() = vtask {
+                        return failwith "not implemented"
+                    } }}
      
     /// Given an async sequence which for a given input will produce the next sub-sequence
     /// and then returns an async sequence which flattens the results produced by sub-sequences
     /// until all sub-sequences produces will be completed.
-    let collect (f: 'a -> AsyncSeq<'b>) (aseq: AsyncSeq<'a>): AsyncSeq<'b> =
+    let bind (f: 'a -> AsyncSeq<'b>) (aseq: AsyncSeq<'a>): AsyncSeq<'b> =
         { new AsyncSeq<'b> with
             member __.GetAsyncEnumerator (cancel) =
                 let outer = aseq.GetAsyncEnumerator(cancel)
@@ -508,7 +564,10 @@ module AsyncSeq =
                         | Some _ ->
                             return false
                     } } }
-    
+        
+    /// Returns an async sequence, that reads elements from a given channel reader.
+    let inline ofChannel (ch: ChannelReader<'a>): AsyncSeq<'a> = ch.ReadAllAsync()
+        
     /// Attaches a disposal function to a current async sequence, which will be called once a corresponding async
     /// enumerator will be disposed.  
     let onDispose (f: unit -> ValueTask) (aseq: AsyncSeq<'a>): AsyncSeq<'a> =
