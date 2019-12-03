@@ -25,59 +25,56 @@ module AsyncSeq =
         
     /// Returns a task, which will pull all incoming elements from a given sequence
     /// or until token has cancelled, and pushes them to a given channel writer.
-    let into (c: CancellationToken) (chan: ChannelWriter<'a>) (aseq: AsyncSeq<'a>) = vtask {
-            let e = aseq.GetAsyncEnumerator(c)
-            try
+    let into (chan: ChannelWriter<'a>) (aseq: AsyncSeq<'a>) = vtask {
+        let e = aseq.GetAsyncEnumerator()
+        try
+            let! hasNext = e.MoveNextAsync()
+            let mutable hasNext' = hasNext
+            while hasNext' do
+                do! chan.WriteAsync(e.Current)
                 let! hasNext = e.MoveNextAsync()
-                let mutable hasNext' = hasNext
-                while hasNext' do
-                    do! chan.WriteAsync(e.Current, c)
-                    let! hasNext = e.MoveNextAsync()
-                    hasNext' <- hasNext
-                do! e.DisposeAsync()
-                do chan.Complete()
-            with ex ->
-                do! e.DisposeAsync()
-                return rethrow ex }
+                hasNext' <- hasNext
+            do! e.DisposeAsync()
+            do chan.Complete()
+        with ex ->
+            do! e.DisposeAsync()
+            return rethrow ex 
+    }
             
     /// Tries to return the first element of the async sequence,
     /// returning None if sequence is empty or cancellation was called.
-    let tryHead (cancel: CancellationToken) (aseq: AsyncSeq<'a>) = vtask {
-        if cancel.IsCancellationRequested then return None
-        else
-            let e = aseq.GetAsyncEnumerator(cancel)
-            try
-                let! hasNext = e.MoveNextAsync()
-                if hasNext then
-                    do! e.DisposeAsync()
-                    return Some e.Current
-                else
-                    do! e.DisposeAsync()
-                    return None
-            with ex ->
+    let tryHead (aseq: AsyncSeq<'a>) = vtask {
+        let e = aseq.GetAsyncEnumerator()
+        try
+            let! hasNext = e.MoveNextAsync()
+            if hasNext then
                 do! e.DisposeAsync()
-                return rethrow ex
+                return Some e.Current
+            else
+                do! e.DisposeAsync()
+                return None
+        with ex ->
+            do! e.DisposeAsync()
+            return rethrow ex
     }
     
     /// Tries to return the last element of the async sequence,
     /// returning None if sequence is empty or cancellation was called.
-    let tryLast (cancel: CancellationToken) (aseq: AsyncSeq<'a>) = vtask {
-        if cancel.IsCancellationRequested then return None
-        else
-            let e = aseq.GetAsyncEnumerator(cancel)
-            try
+    let tryLast (aseq: AsyncSeq<'a>) = vtask {
+        let e = aseq.GetAsyncEnumerator()
+        try
+            let! hasNext = e.MoveNextAsync()
+            let mutable last = None
+            let mutable hasNext' = hasNext
+            while hasNext' do
+                last <- Some e.Current
                 let! hasNext = e.MoveNextAsync()
-                let mutable last = None
-                let mutable hasNext' = hasNext
-                while hasNext' do
-                    last <- Some e.Current
-                    let! hasNext = e.MoveNextAsync()
-                    hasNext' <- hasNext
-                do! e.DisposeAsync()
-                return last
-            with ex ->
-                do! e.DisposeAsync()
-                return rethrow ex
+                hasNext' <- hasNext
+            do! e.DisposeAsync()
+            return last
+        with ex ->
+            do! e.DisposeAsync()
+            return rethrow ex
     } 
 
     /// Collects all of the incoming events into a single sequence, which is then
@@ -588,19 +585,75 @@ module AsyncSeq =
                                 do! f()
                             return rethrow ex }
                     member __.MoveNextAsync() = inner.MoveNextAsync() } }
-    
-    /// Returns an async sequence, that will produce a new element at given timeout intervals.
-    let tick (timeout: TimeSpan): AsyncSeq<TimeSpan> = failwith "not implemented"
-        
+
     /// Returns an async sequence, that will limit the rate at which the input elements of given
     /// sequence are produces into the output.
-    let throttle (n: int) (timeout: TimeSpan) (aseq: AsyncSeq<'a>): AsyncSeq<'a> = failwith "not implemented"
-    
+    let throttle (count: int) (timeout: TimeSpan) (aseq: AsyncSeq<'a>): AsyncSeq<'a> =
+        if count <= 0 then raise (ArgumentException "AsyncSeq.throttle count must be positive")
+        else
+            { new AsyncSeq<'a> with
+                member __.GetAsyncEnumerator (cancel) =
+                    let inner = aseq.GetAsyncEnumerator(cancel)
+                    let mutable remaining = count
+                    let mutable period = Unchecked.defaultof<Task>
+                    { new IAsyncEnumerator<'a> with
+                        member __.Current = inner.Current
+                        member __.DisposeAsync() = inner.DisposeAsync()
+                        member __.MoveNextAsync() = vtask {
+                            if isNull period || period.IsCompleted then
+                                period <- Task.Delay(timeout)
+                                remaining <- count
+                                let! hasNext = inner.MoveNextAsync()
+                                if hasNext then
+                                   remaining <- remaining - 1
+                                return hasNext                                
+                            elif remaining = 0 then
+                                do! period // trigger throttling
+                                return! inner.MoveNextAsync()
+                            else
+                                remaining <- remaining - 1
+                                return! inner.MoveNextAsync()
+                        } } }
+            
     /// Returns an async sequence, that will monitor the rate at which input elements are
     /// incoming, and in case when no element what produce before a given `timeout` has passed
     /// it will generate a new element using given `inject` function. That function will receive
     /// a last element that was produced prior the timeout.
-    let keepAlive (timeout: TimeSpan) (inject: 'a -> 'a) (aseq: AsyncSeq<'a>): AsyncSeq<'a> = failwith "not implemented"
+    let keepAlive (timeout: TimeSpan) (inject: 'a -> 'a) (aseq: AsyncSeq<'a>): AsyncSeq<'a> = 
+        { new AsyncSeq<'a> with
+            member __.GetAsyncEnumerator (cancel) =
+                let inner = aseq.GetAsyncEnumerator(cancel)
+                let mutable pending = Unchecked.defaultof<Task<bool>>
+                let mutable current = Unchecked.defaultof<'a>
+                let handleAsync () = vtask {
+                    let delay = Task.Delay(timeout, cancel)
+                    let! first = Task.WhenAny(delay, pending)
+                    if obj.ReferenceEquals(first, delay) then
+                        current <- inject current
+                        return true
+                    else
+                        delay.Dispose()
+                        let r = pending
+                        pending <- null
+                        if r.Result then
+                            current <- inner.Current
+                            return true
+                        else
+                            return false }
+                { new IAsyncEnumerator<'a> with
+                    member __.Current = inner.Current
+                    member __.DisposeAsync() = inner.DisposeAsync()
+                    member __.MoveNextAsync() = vtask {
+                        if isNull pending then
+                            let t = inner.MoveNextAsync()
+                            if t.IsCompletedSuccessfully then
+                                current <- inner.Current
+                                return t.Result
+                            else
+                                pending <- t.AsTask()
+                                return! handleAsync()                                
+                        else return! handleAsync()
+                    } } }
     
     /// Deduplicates a consecutive input elements, skipping all elements,
     /// that were considered equal using given equality comparer function. 

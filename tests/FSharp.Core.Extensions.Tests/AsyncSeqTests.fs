@@ -40,7 +40,7 @@ let tests =
                         yield i
                 }
                 |> AsyncSeq.ofSeq
-                |> AsyncSeq.tryHead CancellationToken.None
+                |> AsyncSeq.tryHead
                 |> eval
                 
             Expect.equal actual (Some 1) "a first element should be returned immediately"
@@ -49,18 +49,7 @@ let tests =
             let actual =
                 []
                 |> AsyncSeq.ofSeq
-                |> AsyncSeq.tryHead CancellationToken.None
-                |> eval
-                
-            Expect.equal actual None "returns None for empty sequence"
-            
-        testCase "tryHead should respect cancellation tokens" <| fun _ ->
-            use cts = new CancellationTokenSource()
-            cts.Cancel()
-            let actual =
-                [1;2;3]
-                |> AsyncSeq.ofSeq
-                |> AsyncSeq.tryHead cts.Token
+                |> AsyncSeq.tryHead
                 |> eval
                 
             Expect.equal actual None "returns None for empty sequence"
@@ -69,7 +58,7 @@ let tests =
             let actual =
                 [1;2;3]
                 |> AsyncSeq.ofSeq
-                |> AsyncSeq.tryHead CancellationToken.None
+                |> AsyncSeq.tryHead
                 |> eval
                 
             Expect.equal actual (Some 3) "a first element should be returned immediately"
@@ -78,18 +67,7 @@ let tests =
             let actual =
                 []
                 |> AsyncSeq.ofSeq
-                |> AsyncSeq.tryLast CancellationToken.None
-                |> eval
-                
-            Expect.equal actual None "returns None for empty sequence"
-            
-        testCase "tryLast should respect cancellation tokens" <| fun _ ->
-            use cts = new CancellationTokenSource()
-            cts.Cancel()
-            let actual =
-                [1;2;3]
-                |> AsyncSeq.ofSeq
-                |> AsyncSeq.tryLast cts.Token
+                |> AsyncSeq.tryLast
                 |> eval
                 
             Expect.equal actual None "returns None for empty sequence"
@@ -356,4 +334,3 @@ let tests =
             Expect.equal actual expected "mergeParallel should return combined results"
             Expect.isLessThan elapsed 800L "mergeParallel should not run sub-sequent sequences one by one"
     ]
-
