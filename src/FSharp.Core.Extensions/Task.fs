@@ -176,15 +176,18 @@ module AsyncSeq =
     /// is called - and executes given action over every one of them.
     let inline iter (f: 'a -> ValueTask) aseq = iteri (fun _ e -> f e) aseq
     
-    type MapParallelEnumerator<'a, 'b>(parallelism: int, e: IAsyncEnumerator<'a>, cancel:CancellationToken, map: 'a -> ValueTask<'b>) =
+    [<Sealed>]
+    type private MapParallelEnumerator<'a, 'b>(parallelism: int, e: IAsyncEnumerator<'a>, cancel:CancellationToken, map: 'a -> ValueTask<'b>) =
         let input = Channel.CreateBounded<'a>(parallelism)
         let output = Channel.CreateBounded<'b>(parallelism)
         let mutable current = Unchecked.defaultof<_>
+        let mutable remaining = parallelism
         let workers = Array.init parallelism (fun _ -> unitTask {
-            while cancel.IsCancellationRequested do
+            while not (cancel.IsCancellationRequested || input.Reader.Completion.IsCompleted) do
                 let! next = input.Reader.ReadAsync(cancel)
                 let! o = map next
                 do! output.Writer.WriteAsync(o, cancel)
+            Interlocked.Decrement(&remaining) 
         })
         let reader = Task.Run(Func<Task>(fun () -> unitTask {
             let mutable cont = not cancel.IsCancellationRequested 
@@ -192,9 +195,8 @@ module AsyncSeq =
                 let! hasNext = e.MoveNextAsync()
                 if hasNext then
                     do! input.Writer.WriteAsync(e.Current, cancel)
-                else
-                    input.Writer.Complete()
-                cont <- hasNext && not cancel.IsCancellationRequested
+                cont <- hasNext
+            input.Writer.TryComplete() |> ignore
         }))
         interface IAsyncEnumerator<'b> with
             member __.Current = current
@@ -206,11 +208,14 @@ module AsyncSeq =
             }
             member __.MoveNextAsync() = vtask {
                 if cancel.IsCancellationRequested then return false
-                elif input.Reader.Completion.IsCompleted then return false
+                elif output.Reader.TryRead(&current) then return true
+                elif remaining = 0 then return false
                 else
-                    let! next = output.Reader.ReadAsync(cancel)
-                    current <- next
-                    return true
+                    let! ready = output.Reader.WaitToReadAsync(cancel)
+                    if ready && output.Reader.TryRead(&current) then 
+                        return true
+                    else                      
+                        return false
             }
     
     /// Iterates over all elements of provided async sequence in parallel.
@@ -297,7 +302,7 @@ module AsyncSeq =
                     member __.DisposeAsync() = inner.DisposeAsync()
                     member __.MoveNextAsync() = vtask {
                         let! hasNext = inner.MoveNextAsync()
-                        let mutable cont = hasNext && not cancel.IsCancellationRequested
+                        let mutable cont = hasNext
                         while cont do
                             let! result = f inner.Current
                             current <- result
@@ -306,8 +311,8 @@ module AsyncSeq =
                                 cont <- false
                             | None ->
                                 let! hasNext = inner.MoveNextAsync()
-                                cont <- hasNext && not cancel.IsCancellationRequested
-                        return Option.isSome current      
+                                cont <- hasNext
+                        return cont && Option.isSome current      
                     } }}
     
     /// Returns an async sequence which filters out the input async sequence elements,
@@ -315,6 +320,46 @@ module AsyncSeq =
     let filter (f: 'a -> bool) (aseq: AsyncSeq<'a>): AsyncSeq<'a> =
         choose (fun a -> if f a then ValueTask<_>(Some a) else ValueTask<_> None) aseq
 
+    [<Sealed>]
+    type private MergeParallelEnumerator<'a>(enums: ResizeArray<IAsyncEnumerator<'a>>, cancel: CancellationToken) =
+        let input = Channel.CreateBounded<'a>(1)
+        let mutable current = Unchecked.defaultof<_>
+        let tasks =
+            enums
+            |> Seq.map (fun e -> Task.Run(Func<Task>(fun () -> unitTask {
+                let! hasNext = e.MoveNextAsync()
+                let mutable hasNext' = hasNext
+                while not cancel.IsCancellationRequested && hasNext' do
+                    let current = e.Current
+                    do! input.Writer.WriteAsync(current, cancel)
+                    let! hasNext = e.MoveNextAsync()
+                    hasNext' <- hasNext
+                enums.Remove e |> ignore
+                if enums.Count = 0 then input.Writer.TryComplete() |> ignore
+            })))
+            |> Seq.toArray
+        interface IAsyncEnumerator<'a> with
+            member __.Current = current
+            member this.DisposeAsync() = unitVtask {
+                for e in enums do
+                    do! e.DisposeAsync()
+                for t in tasks do
+                    t.Dispose()
+                input.Writer.TryComplete() |> ignore
+            }
+            member this.MoveNextAsync() = vtask {
+                if cancel.IsCancellationRequested || enums.Count = 0 then return false
+                else
+                    let! ready = input.Reader.WaitToReadAsync(cancel)
+                    if ready then
+                        let (has, next) = input.Reader.TryRead()
+                        if has then
+                            current <- next
+                            return true
+                        else return false
+                    else return false
+            }
+    
     /// Merges a collection of async sequences together, emitting output of each one of them
     /// (obtained in parallel) as an input of result async sequence. Returned sequence will
     /// complete once all of the merged sequences will complete, and fail when any of the 
@@ -322,17 +367,9 @@ module AsyncSeq =
     let mergeParallel (sequences: AsyncSeq<'a>[]): AsyncSeq<'a> = 
         { new AsyncSeq<'a> with
             member __.GetAsyncEnumerator (cancel) =
-                let enums = sequences |> Array.map (fun s -> s.GetAsyncEnumerator(cancel))
-                let mutable current = Unchecked.defaultof<_>
-                { new IAsyncEnumerator<'a> with
-                    member __.Current = current
-                    member __.DisposeAsync() = unitVtask {
-                        let tasks = enums |> Array.map (fun e -> e.DisposeAsync().AsTask())
-                        do! Task.WhenAll tasks
-                    }
-                    member __.MoveNextAsync() = vtask {
-                        return failwith "not implemented"
-                    } }}
+                let enums = sequences |> Array.map (fun s -> s.GetAsyncEnumerator(cancel)) |> ResizeArray
+                upcast MergeParallelEnumerator<'a>(enums, cancel)
+        }
      
     /// Given an async sequence which for a given input will produce the next sub-sequence
     /// and then returns an async sequence which flattens the results produced by sub-sequences
@@ -780,14 +817,12 @@ module AsyncSeq =
                         let mutable skipped' = true
                         while hasNext' && skipped' do
                             match last with
-                            | None ->
-                                last <- Some inner.Current
-                                skipped' <- false
                             | Some l when equal l inner.Current ->
                                 let! hasNext = inner.MoveNextAsync()
                                 hasNext' <- hasNext
                                 skipped' <- true
                             | _ ->
+                                last <- Some inner.Current
                                 skipped' <- false
                         return hasNext'
                     } } }
