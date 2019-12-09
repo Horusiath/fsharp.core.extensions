@@ -58,7 +58,7 @@ let tests =
             let actual =
                 [1;2;3]
                 |> AsyncSeq.ofSeq
-                |> AsyncSeq.tryHead
+                |> AsyncSeq.tryLast
                 |> eval
                 
             Expect.equal actual (Some 3) "a first element should be returned immediately"
@@ -108,11 +108,11 @@ let tests =
                     incr expected })
             t.GetAwaiter().GetResult()
             
-        testProperty "iteri should work over consecutive elements" <| fun (input: int[]) ->
+        testProperty "mapAsynci should work over consecutive elements" <| fun (input: int[]) ->
             let actual =
                 input
                 |> AsyncSeq.ofSeq
-                |> AsyncSeq.mapi (fun i e -> vtask {
+                |> AsyncSeq.mapAsynci (fun i e -> vtask {
                     do! Task.Yield()
                     return e + (int i)
                 })
@@ -126,7 +126,7 @@ let tests =
             let actual =
                 input
                 |> AsyncSeq.ofSeq
-                |> AsyncSeq.map (fun e -> vtask {
+                |> AsyncSeq.mapAsync (fun e -> vtask {
                     do! Task.Yield()
                     return e
                 })
@@ -161,16 +161,16 @@ let tests =
             for i in actual do
                 Expect.isTrue (i % 2 = 0) "filter should not pass incorrect elements"
                 
-        testCase "bind should execute all sub-sequences untill completion" <| fun _ ->
+        testProperty "bind should execute all sub-sequences until completion" <| fun (input: int[][]) ->
             let actual =
-                [1;3;3;2]
+                input
                 |> AsyncSeq.ofSeq
-                |> AsyncSeq.bind (fun i ->
-                    AsyncSeq.ofSeq (seq { for j = 1 to i do yield j }))
+                |> AsyncSeq.bind AsyncSeq.ofSeq
                 |> AsyncSeq.collect
                 |> eval
                 |> List.ofSeq
-            Expect.equal actual [1; 1;2;3; 1;2;3; 1;2] "bound elements should be picked one after another until the end"
+            let expected = Array.concat input |> Array.toList
+            Expect.equal actual expected "bound elements should be picked one after another until the end"
             
         testCase "skipWhile should omit all elements until the first one appears" <| fun _ ->
             let actual =
@@ -208,15 +208,15 @@ let tests =
             let sw = System.Diagnostics.Stopwatch()
             sw.Start()
             let t =
-                [1..5]
+                [1L..5L]
                 |> AsyncSeq.ofSeq
                 |> AsyncSeq.delay (TimeSpan.FromMilliseconds 100.)
                 |> AsyncSeq.iter (fun i -> unitVtask {
                     let elapsed = sw.ElapsedMilliseconds
-                    sw.Reset()
-                    Expect.isGreaterThanOrEqual elapsed 100L "delayed element should comply to delay lower bound"
+                    Expect.isGreaterThanOrEqual elapsed (i*100L) (sprintf "delayed element [%i] should comply to delay lower bound" i)
                 })
             t.GetAwaiter().GetResult()
+            sw.Stop()
             
         testCase "withCancellation should be applied to underlying async sequence" <| fun _ ->
             use cts = new CancellationTokenSource()
@@ -235,7 +235,7 @@ let tests =
                 [1..20]
                 |> AsyncSeq.ofSeq
                 |> AsyncSeq.grouped 6
-                |> AsyncSeq.map (fun b -> ValueTask<_>(List.ofArray b))
+                |> AsyncSeq.mapAsync (fun b -> ValueTask<_>(List.ofArray b))
                 |> AsyncSeq.collect
                 |> eval
                 |> List.ofSeq
@@ -265,7 +265,7 @@ let tests =
                 |> List.ofSeq
             Expect.equal actual [i] "should pick first element and then close"
             
-        testCase "deduplicate should remove consecutive duplicates" <| fun _ ->
+        ftestCase "deduplicate should remove consecutive duplicates" <| fun _ ->
             let actual = 
                 AsyncSeq.ofSeq [1;1;1;2;3;3;1;1;2]
                 |> AsyncSeq.collect
@@ -309,6 +309,24 @@ let tests =
                 |> eval
                 |> List.ofSeq
             Expect.equal actual [1;2;3] "func should produce elements until first None was provided"
+            
+        testCase "mapParrallel should pick elements in parallel" <| fun _ ->
+            let sw = System.Diagnostics.Stopwatch()
+            sw.Start()
+            let actual =
+                [|1..40|]
+                |> AsyncSeq.ofSeq
+                |> AsyncSeq.mapParallel 4 (fun i -> vtask {
+                    do! Task.Delay(15)
+                    return i + 1
+                })
+                |> AsyncSeq.collect
+                |> eval
+                |> List.ofSeq
+            let elapsed = sw.ElapsedMilliseconds
+            sw.Stop()
+            Expect.isLessThan elapsed 200L "elements should be processed in parallel"
+            Expect.containsAll actual [|2..41|] "result should contain necessary elements"
         
         testCase "mergeParallel should return all combined results" <| fun _ ->
             let seqs = [|
