@@ -183,11 +183,11 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
     static let emptyNode: VecNode<'a> = Branch (Array.zeroCreate VecConst.capacity)
     static let empty = Vec<_>(0, VecConst.off, emptyNode, [||])
     
-    let rec popTail level (node) (removed: 'a outref) =
+    let rec popTail level (node) =
         let subidx = ((count-2) >>> level) &&& VecConst.mask
         if level > 5 then
             let (Branch children) = node
-            let child' = popTail (level-5) children.[subidx] &removed
+            let child' = popTail (level-5) children.[subidx]
             if obj.ReferenceEquals(child', Unchecked.defaultof<_>) && subidx = 0
             then Unchecked.defaultof<_>
             else
@@ -195,14 +195,17 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
                 result.[subidx] <- child'
                 Branch result
         elif subidx = 0 then
-            removed <- tail.[0]
             Unchecked.defaultof<_>
         else
-            let (Leaf children) = node
-            let result = Array.copy children
-            removed <- children.[subidx]
-            result.[subidx] <- Unchecked.defaultof<_>
-            Leaf result
+            match node with
+            | Leaf children ->
+                let result = Array.copy children
+                result.[subidx] <- Unchecked.defaultof<_>
+                Leaf result
+            | Branch nodes ->
+                let result = Array.copy nodes
+                result.[subidx] <- Unchecked.defaultof<_>
+                Branch result
             
     
     let rec doAssoc level node i value (old: 'a outref) =
@@ -338,8 +341,9 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
             Array.blit tail 0 tail' 0 tail'.Length
             Vec<_>(i-1, shift, root, tail')
         | _ ->
+            removed <- tail.[tail.Length-1]
             let tail' = this.FindArrayForIndex(count-2)
-            let r = popTail shift root &removed
+            let r = popTail shift root
             let children' =
                 match r with
                 | Branch c -> c
