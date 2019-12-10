@@ -109,6 +109,21 @@ type internal VecBuilder<'a> =
     member this.AddRange(values: 'a[]) =
         let mutable remaining = values.Length
         let mutable valuesOffset = 0
+        if this.count - VecConst.tailoff this.count >= 32 then
+            let mutable shift' = this.shift
+            let tailNode = Leaf this.tail
+            this.tail <- Array.zeroCreate VecConst.capacity
+            let root' =
+                if ((this.count >>> VecConst.off) > (1 <<< this.shift)) then
+                    let n = Array.zeroCreate VecConst.capacity
+                    n.[0] <- this.root
+                    n.[1] <- VecConst.pathFor this.shift tailNode
+                    shift' <- shift' + 5
+                    Branch n
+                else
+                    VecConst.appendTail this.count this.shift this.root tailNode
+            this.root <- root'
+            this.shift <- shift'
         while remaining <> 0 do
             let start = this.count&&&VecConst.mask
             let size = Math.Min(remaining, VecConst.capacity - start)
@@ -243,8 +258,9 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
                     node <- array.[(index >>> level) &&& VecConst.mask]
                 | _ -> ()
                 level <- level - VecConst.off
-            let (Leaf array) = node
-            array
+            match node with
+            | Leaf array -> array
+            | _ -> failwithf "Expected leaf for index %i, but got %A (count: %i, shift: %i)" index node count shift
     
     member __.Add(value) =
         if count - VecConst.tailoff count < VecConst.capacity
