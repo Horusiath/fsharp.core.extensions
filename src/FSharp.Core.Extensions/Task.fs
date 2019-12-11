@@ -6,6 +6,7 @@ open System.Runtime.ExceptionServices
 open System.Threading.Tasks
 open System.Threading
 open System
+open System
 open System.Threading.Channels
 
 type AsyncSeq<'a> = IAsyncEnumerable<'a>
@@ -381,6 +382,37 @@ module AsyncSeq =
                 let enums = sequences |> Array.map (fun s -> s.GetAsyncEnumerator(cancel)) |> ResizeArray
                 upcast MergeParallelEnumerator<'a>(enums, cancel)
         }
+            
+    /// Merges together multiple async `sequences`, consuming one after another until they complete.
+    let merge (sequences: AsyncSeq<'a> seq): AsyncSeq<'a> =
+        { new AsyncSeq<'a> with
+            member __.GetAsyncEnumerator (cancel) =
+                let mutable seqs = sequences |> List.ofSeq
+                let mutable head = Unchecked.defaultof<IAsyncEnumerator<'a>>
+                let rec consume () = vtask {
+                    match head with
+                    | null ->
+                        match seqs with
+                        | [] -> return false
+                        | h::t ->
+                            head <- h.GetAsyncEnumerator(cancel)
+                            seqs <- t
+                            return! consume ()
+                    | e ->
+                        let! hasNext = e.MoveNextAsync()
+                        if hasNext then return true
+                        else
+                            do! e.DisposeAsync()
+                            head <- null
+                            return! consume() }     
+                { new IAsyncEnumerator<'a> with
+                    member __.Current = head.Current
+                    member __.DisposeAsync() = unitVtask {
+                        if not (isNull head) then
+                            do! head.DisposeAsync()
+                    }
+                    member __.MoveNextAsync() = consume()
+                } }
      
     /// Given an async sequence which for a given input will produce the next sub-sequence
     /// and then returns an async sequence which flattens the results produced by sub-sequences
@@ -837,3 +869,85 @@ module AsyncSeq =
                                 skipped' <- false
                         return hasNext'
                     } } }
+        
+    [<Sealed>]
+    type internal GroupByAgent<'a, 'b>(cap: int, key: 'b, cancel: CancellationToken) =
+        let chan = Channel.CreateBounded<'a>(cap)
+        let mutable completed = false
+        member __.Push(item) = chan.Writer.WriteAsync(item, cancel)
+        member __.AsyncSeq() = 
+            { new AsyncSeq<_> with
+                member __.GetAsyncEnumerator (cancel) =
+                    let mutable current = Unchecked.defaultof<_>
+                    { new IAsyncEnumerator<_> with
+                        member __.Current = current
+                        member __.DisposeAsync() = chan.Writer.Complete(); ValueTask()
+                        member __.MoveNextAsync() = vtask {
+                            if cancel.IsCancellationRequested then return false
+                            else
+                                match chan.Reader.TryRead() with
+                                | true, item ->
+                                    current <- item
+                                    return true
+                                | false, _ ->
+                                    // even if we were completed, we should saturate channel before completion
+                                    if completed then return false
+                                    else
+                                        let! cont = chan.Reader.WaitToReadAsync(cancel)
+                                        if cont then
+                                            match chan.Reader.TryRead() with
+                                            | true, item ->
+                                                current <- item
+                                                return true
+                                            | false, _ -> return false
+                                        else return false
+                        } } }
+        member __.Complete() = completed <- true
+        
+    [<Sealed>]
+    type internal GroupByReader<'a, 'b when 'b: equality>(capacity: int, childCapacity, selector: 'a -> 'b, cancel: CancellationToken, enumerator: IAsyncEnumerator<'a>) =
+        let chan = Channel.CreateBounded<('b * AsyncSeq<'a>)>(capacity)
+        let children = System.Collections.Generic.Dictionary<'b, GroupByAgent<'a,'b>>(capacity)
+        let complete() = 
+            chan.Writer.TryComplete() |> ignore
+            for e in children do
+                e.Value.Complete()
+        let task = Task.Run(Func<Task>(fun () -> unitTask {
+            let mutable cont = not cancel.IsCancellationRequested 
+            while cont do
+                let! hasNext = enumerator.MoveNextAsync()
+                if hasNext then
+                    let item = enumerator.Current
+                    let key = selector item
+                    match children.TryGetValue(key) with
+                    | true, agent ->
+                        do! agent.Push(item)
+                    | false, _ ->
+                        let agent = new GroupByAgent<'a, 'b>(childCapacity, key, cancel)
+                        children.[key] <- agent
+                        do! chan.Writer.WriteAsync((key, agent.AsyncSeq()), cancel)
+                        do! agent.Push(item)
+                else cont <- false
+            complete()
+        }))
+        member __.AsyncSeq() = chan.Reader.ReadAllAsync()
+        interface IAsyncDisposable with
+            member __.DisposeAsync() = unitVtask {
+                task.Dispose()
+                complete()
+            }
+        
+    /// Groups incoming events by provided key selector, returning an async sequence
+    /// which return pair of produced key and newly produced output. To avoid pulling
+    /// unbounded load, `maxActiveGroups` can be specified to limit the max number of
+    /// active children sequences. Each group-sequence will also allow to pull up to a
+    /// `capacityPerGroup` elements.
+    let groupBy (maxActiveGroups: int) (capacityPerGroup: int) (fn: 'a -> 'b) (aseq: AsyncSeq<'a>): AsyncSeq<('b * AsyncSeq<'a>)> =
+        { new AsyncSeq<_> with
+            member __.GetAsyncEnumerator (cancel) =
+                let reader = GroupByReader<'a, 'b>(maxActiveGroups, capacityPerGroup, fn, cancel, aseq.GetAsyncEnumerator(cancel))
+                let inner = reader.AsyncSeq().GetAsyncEnumerator(cancel)
+                { new IAsyncEnumerator<_> with
+                    member __.Current = inner.Current
+                    member __.DisposeAsync() = (reader :> IAsyncDisposable).DisposeAsync()
+                    member __.MoveNextAsync() = inner.MoveNextAsync() } }

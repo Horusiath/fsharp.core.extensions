@@ -24,6 +24,7 @@ open System.Threading.Tasks
 open Expecto
 open FSharp.Control.Tasks.Builders
 open FSharp.Core
+open FSharp.Core
 
 let private eval (x: ValueTask<'a>) = x.GetAwaiter().GetResult()
 
@@ -369,4 +370,36 @@ let tests =
             ]
             Expect.equal actual expected "mergeParallel should return combined results"
             Expect.isLessThan elapsed 800L "mergeParallel should not run sub-sequent sequences one by one"
+            
+        testProperty "merge should return all combined results in order" <| fun (a: int[][]) ->
+            let expected = Array.concat a |> Array.toList
+            let actual =
+                a
+                |> Array.map AsyncSeq.ofSeq
+                |> AsyncSeq.merge
+                |> AsyncSeq.collect
+                |> eval
+                |> List.ofSeq
+            Expect.equal actual expected "merge should return ordered result"
+            
+        testProperty "groupBy should work" <| fun (input: int list) ->
+            let expected =
+                input
+                |> Seq.groupBy (fun i -> i % 100)
+                |> Map.ofSeq
+                |> Map.map (fun k v -> Set.ofSeq v)
+            let actual =
+                input
+                |> AsyncSeq.ofSeq
+                |> AsyncSeq.groupBy 50 10 (fun i -> i % 100)
+                |> AsyncSeq.mapParallel 10 (fun (k, s) -> vtask {
+                    let! items = s |> AsyncSeq.collect
+                    return (k, Set.ofSeq items)
+                })
+                |> AsyncSeq.collect
+                |> eval
+                |> Map.ofSeq
+            Expect.equal actual expected "groupBy should return correct groups"
+            for (KeyValue(k, v)) in actual do
+                Expect.all v (fun i -> i % 100 = k) "groups should be created correctly"
     ]
