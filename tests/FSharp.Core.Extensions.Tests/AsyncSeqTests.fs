@@ -323,6 +323,27 @@ let tests =
                 |> eval
                 |> List.ofSeq
             Expect.containsAll actual [|2..41|] "result should contain necessary elements"
+            
+        testCase "repeat should respect cancellation token" <| fun _ ->
+            use cancel = new CancellationTokenSource()
+            cancel.Cancel()
+            let actual =
+                AsyncSeq.repeat "hello"
+                |> AsyncSeq.withCancellation cancel.Token
+                |> AsyncSeq.collect
+                |> eval
+                |> List.ofSeq
+            Expect.equal actual [] "AsyncSeq.repeat should be cancelled"
+            
+        testCase "repeat should be composable into range sequence" <| fun _ ->
+            let actual =
+                AsyncSeq.repeat 1
+                |> AsyncSeq.scan (fun x y -> ValueTask<_>(x + y)) 0
+                |> AsyncSeq.take 5L
+                |> AsyncSeq.collect
+                |> eval
+                |> List.ofSeq
+            Expect.equal actual [1;2;3;4;5] "repeat should work"
         
         testCase "mergeParallel should return all combined results" <| fun _ ->
             let seqs = [|

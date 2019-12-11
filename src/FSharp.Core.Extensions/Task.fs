@@ -32,6 +32,17 @@ module AsyncSeq =
                     member __.DisposeAsync() = ValueTask()
                     member __.MoveNextAsync() = ValueTask<_>(false) } }
         
+    /// Returns the same `value` over and over until a cancellation token triggers.
+    let repeat (value: 'a): AsyncSeq<'a> =
+        { new AsyncSeq<'a> with
+            member __.GetAsyncEnumerator (cancel) =
+                { new IAsyncEnumerator<'a> with
+                    member __.Current = value
+                    member __.DisposeAsync() = ValueTask()
+                    member __.MoveNextAsync() =
+                        if cancel.IsCancellationRequested then ValueTask<_>(false)
+                        else ValueTask<_>(true) } }
+        
     /// Returns a task, which will pull all incoming elements from a given sequence
     /// or until token has cancelled, and pushes them to a given channel writer.
     let into (chan: ChannelWriter<'a>) (aseq: AsyncSeq<'a>) = vtask {
