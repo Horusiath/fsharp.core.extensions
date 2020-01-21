@@ -78,13 +78,13 @@ Here's the performance check of given operations - the operation is about gettin
 - *Mutex* which uses `Mutex` as a tool of control.
 - *SemaphoreSlim* which uses `SemaphoreSlim` - an optimized variant of mutex/semaphore.
 
-|          Method |         Mean |      Error |     StdDev |  Ratio | RatioSD |  Gen 0 | Gen 1 | Gen 2 | Allocated |
-|---------------- |-------------:|-----------:|-----------:|-------:|--------:|-------:|------:|------:|----------:|
-| InterlockedLoop |     6.639 ns |  0.0821 ns |  0.0768 ns |   1.00 |    0.00 |      - |     - |     - |         - |
-|    AtomicUpdate |     9.373 ns |  0.2935 ns |  0.4302 ns |   1.43 |    0.09 | 0.0115 |     - |     - |      24 B |
-|      ObjectLock |    15.550 ns |  0.3465 ns |  0.4382 ns |   2.36 |    0.09 |      - |     - |     - |         - |
-|           Mutex | 1,423.705 ns | 59.8898 ns | 98.4006 ns | 223.52 |   18.64 |      - |     - |     - |         - |
-|   SemaphoreSlim |    45.281 ns |  0.9881 ns |  1.1763 ns |   6.86 |    0.19 |      - |     - |     - |         - |
+|          Method |        Mean |     Error |    StdDev |  Ratio | RatioSD | Gen 0 | Gen 1 | Gen 2 | Allocated |
+|---------------- |------------:|----------:|----------:|-------:|--------:|------:|------:|------:|----------:|
+| InterlockedLoop |    16.03 ns |  0.078 ns |  0.069 ns |   1.00 |    0.00 |     - |     - |     - |         - |
+|    AtomicUpdate |    16.11 ns |  0.106 ns |  0.099 ns |   1.00 |    0.01 |     - |     - |     - |         - |
+|      ObjectLock |    36.18 ns |  0.204 ns |  0.190 ns |   2.26 |    0.01 |     - |     - |     - |         - |
+|           Mutex | 3,225.95 ns | 29.755 ns | 24.847 ns | 201.37 |    1.95 |     - |     - |     - |         - |
+|   SemaphoreSlim |   103.32 ns |  0.965 ns |  0.903 ns |   6.45 |    0.06 |     - |     - |     - |         - |
 
 
 ### Vec

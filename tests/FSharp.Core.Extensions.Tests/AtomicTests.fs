@@ -90,13 +90,13 @@ let tests =
 
         testCase "Atomic int increments the value" <| fun _ ->
             let a = atom 1
-            let old = a |> Atomic.inc
+            let old = a |> Atomic.incr
             Expect.equal old 2  "Atomic increment should return updated value"
             Expect.equal !a 2 "Atomic increment should store updated value"
             
         testCase "Atomic int decrements the value" <| fun _ ->
             let a = atom 1
-            let old = a |> Atomic.dec
+            let old = a |> Atomic.decr
             Expect.equal old 0  "Atomic decrement should return updated value"
             Expect.equal !a 0 "Atomic decrement should store updated value"
             
@@ -133,13 +133,13 @@ let tests =
 
         testCase "Atomic int64 increments the value" <| fun _ ->
             let a = atom 1L
-            let old = a |> Atomic.inc
+            let old = a |> Atomic.incr
             Expect.equal old 2L "Atomic increment should return updated value"
             Expect.equal !a 2L "Atomic increment should store updated value"
             
         testCase "Atomic int64 decrements the value" <| fun _ ->
             let a = atom 1L
-            let old = a |> Atomic.dec
+            let old = a |> Atomic.decr
             Expect.equal old 0L  "Atomic decrement should return updated value"
             Expect.equal !a 0L "Atomic decrement should store updated value"
             

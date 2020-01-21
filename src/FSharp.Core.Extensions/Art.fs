@@ -305,48 +305,48 @@ module internal ArtNode =
         | ArtConst.Node256 -> addUnsafe256 n c child
         | _ -> null
                     
-    //let rec private recursiveInsert (n: ArtNode<'a>) (ref: ArtNode<'a> byref) (key: string) (byteKey: byte[]) (value: 'a) (depth: int) =
-    //    // If we are at a NULL node, inject a leaf
-    //    if isNull n then
-    //        ref <- leaf key byteKey value
-    //        null
-    //    elif n.IsLeaf then
-    //        let l = n :?> ArtLeaf<'a>
-    //        // Check if we are updating an existing value
-    //        if l.IsMatch(key) then
-    //            // replace existing key
-    //            ref <- leaf key byteKey value
-    //        else
-    //            // New value, we must split the leaf into a node4
-    //            let l2 = leaf key byteKey value
-    //            let longestPrefix = l.LongestCommonPrefix(l2, depth)
-    //            let segment = ArraySegment<byte>(l2.byteKey, depth, longestPrefix)
-    //            let node = node4 segment
-    //            addUnsafe4 node l.byteKey.[depth+longestPrefix] l |> ignore
-    //            addUnsafe4 node l2.byteKey.[depth+longestPrefix] l2 |> ignore
-    //            ref <- node
-    //        null
-    //    else
-    //        let branch = n :?> ArtBranch<'a>
-    //        // Check if given node has a prefix
-    //        let prefixDiff = prefixMismatch (ArraySegment<_>(byteKey, 0, byteKey.Length)) depth branch
-    //        if prefixDiff < branch.PartialLength then
-    //            // Determine if the prefixes differ, since we need to split
-    //            let node' = node4 (ArraySegment(byteKey, branch.Partial.Offset, prefixDiff))
-    //            addUnsafe4 node' branch.Partial.[prefixDiff] branch |> ignore
-    //            branch.Partial <- ArraySegment<_>(branch.Partial.Array, branch.Partial.Offset, branch.Partial.Count - preffixDiff + 1)
-    //            ArtConst.memmove branch.Partial.Array branch.Partial.Offset (prefixDiff + 1)
-    //            // Insert the new leaf
-    //            let leaf = leaf key byteKey value
-    //            addUnsafe4 node' byteKey.[depth+prefixDiff] leaf |> ignore
-    //            null
-    //        else
-    //            match branch.FindChild byteKey.[depth+branch.PartialLength] with
-    //            | null ->
-    //                // No child, node goes within us
-    //                let leaf = leaf key byteKey value
-    //                addUnsafe branch byteKey.[depth+branch.PartialLength] leaf
-    //            | child -> recursiveInsert child &child key byteKey value (depth+branch.PartialLength+1)
+    let rec private insert (n: ArtNode<'a>) (ref: ArtNode<'a> byref) (key: string) (byteKey: byte[]) (value: 'a) (depth: int) =
+        // If we are at a NULL node, inject a leaf
+        if isNull n then
+            ref <- leaf key byteKey value
+            null
+        elif n.IsLeaf then
+            let l = n :?> ArtLeaf<'a>
+            // Check if we are updating an existing value
+            if l.IsMatch(key) then
+                // replace existing key
+                ref <- leaf key byteKey value
+            else
+                // New value, we must split the leaf into a node4
+                let l2 = leaf key byteKey value
+                let longestPrefix = l.LongestCommonPrefix(l2, depth)
+                let segment = ArraySegment<byte>(l2.byteKey, depth, longestPrefix)
+                let node = node4 segment
+                addUnsafe4 node l.byteKey.[depth+longestPrefix] l |> ignore
+                addUnsafe4 node l2.byteKey.[depth+longestPrefix] l2 |> ignore
+                ref <- node
+            null
+        else
+            let branch = n :?> ArtBranch<'a>
+            // Check if given node has a prefix
+            let prefixDiff = prefixMismatch (ArraySegment<_>(byteKey, 0, byteKey.Length)) depth branch
+            if prefixDiff < branch.PartialLength then
+                // Determine if the prefixes differ, since we need to split
+                let node' = node4 (ArraySegment(byteKey, branch.Partial.Offset, prefixDiff))
+                addUnsafe4 node' branch.Partial.[prefixDiff] branch |> ignore
+                //branch.Partial <- ArraySegment<_>(branch.Partial.Array, branch.Partial.Offset, branch.Partial.Count - preffixDiff + 1)
+                ArtConst.memmove branch.Partial.Array branch.Partial.Offset (prefixDiff + 1)
+                // Insert the new leaf
+                let leaf = leaf key byteKey value
+                addUnsafe4 node' byteKey.[depth+prefixDiff] leaf |> ignore
+                null
+            else
+                match branch.FindChild byteKey.[depth+branch.PartialLength] with
+                | null ->
+                    // No child, node goes within us
+                    let leaf = leaf key byteKey value
+                    addUnsafe branch byteKey.[depth+branch.PartialLength] leaf
+                //| child -> insert child &child key byteKey value (depth+branch.PartialLength+1)
                 
 [<IsByRefLike;Struct>]
 type ArtEnumerator<'a> internal(root: ArtNode<'a>) =
@@ -395,14 +395,19 @@ type Art<'a> internal(count: int, root: ArtNode<'a>) =
         result
         
     member __.Minimum =
-        if count = 0 then raise (InvalidOperationException "Cannot return minimum key-value of empty prefix map")
-        let leaf = (ArtNode.min root)
-        (leaf.key, leaf.value)
+        if count = 0 then ValueNone
+        else
+            let leaf = (ArtNode.min root)
+            ValueSome (leaf.key, leaf.value)
         
     member __.Maximum = 
-        if count = 0 then raise (InvalidOperationException "Cannot return maximum key-value of empty prefix map")
-        let leaf = (ArtNode.max root)
-        (leaf.key, leaf.value)
+        if count = 0 then ValueNone
+        else 
+            let leaf = (ArtNode.max root)
+            ValueSome (leaf.key, leaf.value)
+        
+    member __.Add(key: string, value: 'a): Art<'a> =
+        failwith "not implemented"
         
     member __.GetEnumerator() = new ArtEnumerator<'a>(root)
     //interface IEnumerable<KeyValuePair<string, 'a>> with
@@ -424,15 +429,15 @@ module Art =
     
     /// Returns a minimum element of provided Adaptive Radix Tree.
     /// Fails with exception if `map` is empty.
-    let inline min (map: Art<'a>): (string * 'a) = map.Minimum
+    let inline min (map: Art<'a>): (string * 'a) voption = map.Minimum
     
     /// Returns a maximum element of provided Adaptive Radix Tree.
     /// Fails with exception if `map` is empty.
-    let inline max (map: Art<'a>): (string * 'a) = map.Maximum
+    let inline max (map: Art<'a>): (string * 'a) voption = map.Maximum
 
     /// Inserts a new `value` under provided `key`, returning a new Adaptive Radix Tree in the result.
     /// If there was already another value under the provided `key`, it will be overriden.
-    let add (key: string) (value: 'a) (map: Art<'a>): Art<'a> = failwith "not implemented"
+    let add (key: string) (value: 'a) (map: Art<'a>): Art<'a> = map.Add(key, value)
     
     /// Creates a new Adaptive Radix Tree out of provided tuple sequence.
     let ofSeq (seq: seq<string * 'a>): Art<'a> =

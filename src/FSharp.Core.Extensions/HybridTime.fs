@@ -17,14 +17,12 @@ limitations under the License.
 namespace FSharp.Core
 
 open System
-open System
 open System.Runtime.CompilerServices
-open System.Threading
 open System.Threading
 
 /// Implementation of Hybrid-Logical Time, which aims to provide a consistent always increasing timestamps,
 /// which is not always guaranteed by a `System.DateTime.UtcNow` property. In order to achieve that, when
-/// a new timestamp is coming from remote system, a `HybridTime.update` should be called.
+/// a new timestamp is coming from remote system, a `HybridTime.adjust` should be called.
 ///
 /// Implementation uses UTC-compatible 64bit date time representation, where top 48bits are used as a basis
 /// for physical time - this allows to keep time consistency up to milliseconds. The lower 16bits are used
@@ -34,7 +32,7 @@ open System.Threading
 [<IsReadOnly;Struct>]
 type HybridTime =
     { Ticks: int64 }
-    override this.ToString() = DateTime(this.Ticks, DateTimeKind.Utc).ToString("O")
+    override this.ToString() = DateTime(this.Ticks, DateTimeKind.Utc).ToString("O")    
 
 [<RequireQualifiedAccess>]
 module HybridTime =
@@ -53,7 +51,7 @@ module HybridTime =
     /// Converts current `HybridTime` to a `DateTime`.
     let inline toDateTime (time: HybridTime): DateTime = DateTime(time.Ticks, DateTimeKind.Utc)
          
-    let private getTime = fun t -> max (osTime ()) (t+1L)
+    let private getTime = fun t -> Math.Max(osTime (), t+1L)
          
     /// Returns a hybrid time, which can be used to represent a UTC-compatible time.
     let now (): HybridTime =
@@ -63,7 +61,7 @@ module HybridTime =
     let inline ticks (time: HybridTime): int64 = time.Ticks
     
     /// Updates a current hybrid clock with the `time` incoming from remote replica.
-    let update (time: HybridTime): HybridTime =
+    let adjust (time: HybridTime): HybridTime =
         let ticks = latestTicks |> Atomic.update (max time.Ticks)
         { Ticks = ticks }
         

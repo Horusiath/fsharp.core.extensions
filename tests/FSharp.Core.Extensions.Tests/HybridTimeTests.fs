@@ -56,7 +56,7 @@ let tests =
             let remoteTime = HybridTime.ofDateTime (DateTime.UtcNow.AddDays 1.)
             let localTime = HybridTime.now ()
             Expect.isLessThan localTime remoteTime "at first local time should be less than remote"
-            let winner = HybridTime.update remoteTime
+            let winner = HybridTime.adjust remoteTime
             let localTime = HybridTime.now ()
             Expect.equal winner remoteTime "update should detect remote time as the most recent one"
             Expect.isGreaterThan localTime remoteTime "after update, local time should be greater than remote"
@@ -65,7 +65,7 @@ let tests =
             let remoteTime = HybridTime.ofDateTime (DateTime.UtcNow.AddDays -1.)
             let localTime = HybridTime.now ()
             Expect.isGreaterThan localTime remoteTime "local time should be greater than remote"
-            let winner = HybridTime.update remoteTime
+            let winner = HybridTime.adjust remoteTime
             let localTime = HybridTime.now ()
             Expect.notEqual winner remoteTime "update should detect remote time as the outdated one"
             Expect.isGreaterThan localTime remoteTime "after update, local time should be greater than remote"
