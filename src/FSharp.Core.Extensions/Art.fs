@@ -102,8 +102,11 @@ and [<Sealed;AllowNullLiteral>] internal ArtBranch<'a>(flags: int, count: int, p
     member inline __.PartialLength = partial.Count
     member inline __.Partial = partial
     member inline __.Keys = keys
-    member inline __.Children = children
-    
+    member inline __.Children = children    
+    member inline internal this.Copy(newPartial) =
+        ArtBranch<'a>(flags, count, newPartial, Array.copy keys, Array.copy children)        
+    member inline internal this.Copy() =
+        ArtBranch<'a>(flags, count, partial, Array.copy keys, Array.copy children)
     member this.FindChild(c: byte): ArtNode<'a> =
         let childrenCount = this.ChildrenCount
         match this.Type with
@@ -305,17 +308,16 @@ module internal ArtNode =
         | ArtConst.Node256 -> addUnsafe256 n c child
         | _ -> null
                     
-    let rec private insert (n: ArtNode<'a>) (ref: ArtNode<'a> byref) (key: string) (byteKey: byte[]) (value: 'a) (depth: int) =
+    let rec internal insert (n: ArtNode<'a>) (key: string) (byteKey: byte[]) (value: 'a) (depth: int): ArtNode<'a> =
         // If we are at a NULL node, inject a leaf
         if isNull n then
-            ref <- leaf key byteKey value
-            null
+            upcast leaf key byteKey value
         elif n.IsLeaf then
             let l = n :?> ArtLeaf<'a>
             // Check if we are updating an existing value
             if l.IsMatch(key) then
                 // replace existing key
-                ref <- leaf key byteKey value
+                upcast leaf key byteKey value
             else
                 // New value, we must split the leaf into a node4
                 let l2 = leaf key byteKey value
@@ -324,47 +326,67 @@ module internal ArtNode =
                 let node = node4 segment
                 addUnsafe4 node l.byteKey.[depth+longestPrefix] l |> ignore
                 addUnsafe4 node l2.byteKey.[depth+longestPrefix] l2 |> ignore
-                ref <- node
-            null
+                upcast node
         else
             let branch = n :?> ArtBranch<'a>
             // Check if given node has a prefix
             let prefixDiff = prefixMismatch (ArraySegment<_>(byteKey, 0, byteKey.Length)) depth branch
+            // Determine if the prefixes differ, since we may need to split
             if prefixDiff < branch.PartialLength then
-                // Determine if the prefixes differ, since we need to split
+                // we need to split this node in two
+                let newPrefix = ArraySegment<_>(branch.Partial.Array, branch.Partial.Offset, branch.Partial.Count - prefixDiff + 1)
+                let branch' = branch.Copy newPrefix
                 let node' = node4 (ArraySegment(byteKey, branch.Partial.Offset, prefixDiff))
-                addUnsafe4 node' branch.Partial.[prefixDiff] branch |> ignore
-                //branch.Partial <- ArraySegment<_>(branch.Partial.Array, branch.Partial.Offset, branch.Partial.Count - preffixDiff + 1)
-                ArtConst.memmove branch.Partial.Array branch.Partial.Offset (prefixDiff + 1)
+                addUnsafe4 node' branch'.Partial.[prefixDiff] branch' |> ignore
+                ArtConst.memmove branch'.Partial.Array branch'.Partial.Offset (prefixDiff + 1)
                 // Insert the new leaf
                 let leaf = leaf key byteKey value
                 addUnsafe4 node' byteKey.[depth+prefixDiff] leaf |> ignore
-                null
+                upcast branch'
             else
-                match branch.FindChild byteKey.[depth+branch.PartialLength] with
+                let branch' = branch.Copy()
+                // prefix mismatch must be somewhere down the children tree
+                match branch'.FindChild byteKey.[depth+branch'.PartialLength] with
                 | null ->
                     // No child, node goes within us
                     let leaf = leaf key byteKey value
-                    addUnsafe branch byteKey.[depth+branch.PartialLength] leaf
-                //| child -> insert child &child key byteKey value (depth+branch.PartialLength+1)
-                
-[<IsByRefLike;Struct>]
-type ArtEnumerator<'a> internal(root: ArtNode<'a>) =
-    member this.Current = failwith "not implemented"
-    member this.MoveNext(): bool = failwith "not implemented"
-    interface IEnumerator<KeyValuePair<string, 'a>> with
-        member this.Current: KeyValuePair<string, 'a> = this.Current
-        member this.Current: obj = upcast this.Current
-        member this.MoveNext(): bool =
-            let mutable x = this
-            x.MoveNext()
-        member this.Reset() = failwith "not implemented"
-        member this.Dispose() = ()
-                
+                    addUnsafe branch' byteKey.[depth+branch.PartialLength] leaf
+                | child ->
+                    insert child key byteKey value (depth+branch'.PartialLength+1)
 
 /// Immutable Adaptive Radix Tree (ART), which can be treated like `Map<byte[], 'a>`.
 /// Major advantage is prefix-based lookup capability.
 type Art<'a> internal(count: int, root: ArtNode<'a>) =
+    
+    let rec iterate (n: ArtNode<'a>) = seq {
+        let mutable cont = true
+        while cont do
+            if isNull n then cont <- false
+            elif n.IsLeaf then
+                let l = n :?> ArtLeaf<'a>
+                yield KeyValuePair<_,_>(l.key, l.value)
+            else
+                let b = n :?> ArtBranch<'a>
+                match b.Type with
+                | ArtConst.Node4 ->
+                    for i=0 to b.ChildrenCount-1 do
+                        yield! iterate b.Children.[i]
+                | ArtConst.Node16 ->
+                    for i=0 to b.ChildrenCount-1 do
+                        yield! iterate b.Children.[i]
+                | ArtConst.Node48 ->
+                    for i=0 to 255 do
+                        let idx = b.Keys.[i]
+                        if idx <> 0uy then
+                            yield! iterate b.Children.[int (idx-1uy)]
+                | ArtConst.Node256 ->
+                    for i=0 to 255 do
+                        let n' = b.Children.[i]
+                        if not (isNull n') then
+                            yield! iterate n'
+                | _ -> raise(NotSupportedException (sprintf "Unknown node type %i" b.Type))
+    }
+    
     static member Empty: Art<'a> = Art<'a>(0, ArtNode.leaf "" [||] Unchecked.defaultof<_>)
     member this.Count = count
     member this.Search(phrase: string) =
@@ -407,12 +429,15 @@ type Art<'a> internal(count: int, root: ArtNode<'a>) =
             ValueSome (leaf.key, leaf.value)
         
     member __.Add(key: string, value: 'a): Art<'a> =
-        failwith "not implemented"
+        let byteKey = ArtConst.utf8 key
+        let root' = ArtNode.insert root key byteKey.Array value 0 
+        Art<'a>(count+1, root')
         
-    member __.GetEnumerator() = new ArtEnumerator<'a>(root)
-    //interface IEnumerable<KeyValuePair<string, 'a>> with
-    //    member this.GetEnumerator(): IEnumerator<KeyValuePair<string, 'a>> = upcast this.GetEnumerator()
-    //    member this.GetEnumerator(): System.Collections.IEnumerator = upcast this.GetEnumerator()
+    member this.GetEnumerator() = (iterate root).GetEnumerator()
+        
+    interface IEnumerable<KeyValuePair<string, 'a>> with
+        member this.GetEnumerator(): IEnumerator<KeyValuePair<string, 'a>> = this.GetEnumerator()
+        member this.GetEnumerator(): System.Collections.IEnumerator = upcast this.GetEnumerator()
         
                  
 [<RequireQualifiedAccess>]
@@ -457,7 +482,7 @@ module Art =
     let remove (key: string) (map: Art<'a>): Art<'a> = failwith "not implemented"
     
     /// Tries to find a a value under provided `key`.
-    let tryFind (key: string) (map: Art<'a>): 'a voption = failwith "not implemented"
+    let tryFind (key: string) (map: Art<'a>): 'a voption = map.Search key
     
     /// Returns a sequence of key-value elements, which starts with a given `prefix`.
     let prefixed (prefix: string) (map: Art<'a>): KeyValuePair<string, 'a> seq = failwith "not implemented"

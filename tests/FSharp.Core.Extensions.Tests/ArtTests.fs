@@ -24,7 +24,7 @@ open System
 open System.Text
 open System.Collections.Generic
 
-//[<Tests>]
+[<Tests>]
 let tests =
     testList "Adaptive Radix Tree" [
 
