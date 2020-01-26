@@ -219,6 +219,11 @@ module internal ArtNode =
             | _ -> failwith "not supported"
         | _ -> failwith "not supported"
         
+    /// Checks if byte key for provided leaf starts with given prefix.
+    let inline leafPrefixMatches (n: ArtLeaf<'a>) (prefix: ArraySegment<byte> inref) =
+        if n.byteKey.Length < prefix.Count then false
+        else ReadOnlySpan(n.byteKey, 0, prefix.Count).SequenceEqual(ReadOnlySpan(prefix.Array, prefix.Offset, prefix.Count))
+        
     /// Calculates the index at which the prefixes mismatch   
     let prefixMismatch(key: ArraySegment<byte>) (depth: int) (n: ArtBranch<'a>) =
         let mutable len = Math.Min(n.PartialLength, (key.Count - depth))
@@ -386,6 +391,39 @@ type Art<'a> internal(count: int, root: ArtNode<'a>) =
                             yield! iterate n'
                 | _ -> raise(NotSupportedException (sprintf "Unknown node type %i" b.Type))
     }
+        
+    let iteratePrefix (prefix: ArraySegment<byte>) (node: ArtNode<'a>) = seq {
+        let mutable prefixLength = 0
+        let mutable depth = 0
+        let mutable n = node
+        while not (isNull n) do
+            if n.IsLeaf then
+                let l = n :?> ArtLeaf<'a>
+                if ArtNode.leafPrefixMatches l &prefix then
+                    yield KeyValuePair<_,_>(l.key, l.value)
+                n <- null
+            else
+                let b = n :?> ArtBranch<'a>
+                if depth = prefix.Count then
+                    // If the depth matches the prefix, we need to handle this node
+                    let l = ArtNode.min n
+                    if ArtNode.leafPrefixMatches l &prefix then
+                        yield! iterate l
+                    n <- null
+                elif b.PartialLength <> 0 then
+                    // Bail if the prefix does not match
+                    prefixLength <- Math.Min(b.PartialLength, ArtNode.prefixMismatch prefix depth b)
+                    if prefixLength = 0 then
+                        n <- null
+                    elif depth + prefixLength = prefix.Count then
+                        yield! iterate b
+                        n <- null
+                    else depth <- depth + b.PartialLength // if there is a full match, go deeper
+                if not (isNull n) then
+                    let c = prefix.Array.[prefix.Offset + depth]
+                    n <- b.FindChild c
+                    depth <- depth + 1
+    }
     
     static member Empty: Art<'a> = Art<'a>(0, ArtNode.leaf "" [||] Unchecked.defaultof<_>)
     member this.Count = count
@@ -434,6 +472,9 @@ type Art<'a> internal(count: int, root: ArtNode<'a>) =
         Art<'a>(count+1, root')
         
     member this.GetEnumerator() = (iterate root).GetEnumerator()
+    member this.Prefixed(prefix: string) =
+        let byteKey = ArtConst.utf8 prefix
+        iteratePrefix byteKey root
         
     interface IEnumerable<KeyValuePair<string, 'a>> with
         member this.GetEnumerator(): IEnumerator<KeyValuePair<string, 'a>> = this.GetEnumerator()
@@ -482,10 +523,10 @@ module Art =
     let remove (key: string) (map: Art<'a>): Art<'a> = failwith "not implemented"
     
     /// Tries to find a a value under provided `key`.
-    let tryFind (key: string) (map: Art<'a>): 'a voption = map.Search key
+    let inline tryFind (key: string) (map: Art<'a>): 'a voption = map.Search key
     
     /// Returns a sequence of key-value elements, which starts with a given `prefix`.
-    let prefixed (prefix: string) (map: Art<'a>): KeyValuePair<string, 'a> seq = failwith "not implemented"
+    let inline prefixed (prefix: string) (map: Art<'a>): KeyValuePair<string, 'a> seq = map.Prefixed(prefix)
     
     /// Maps all key-value entries of a given Adaptive Radix Tree into new values using function `fn`,
     /// returning a new ART map with modified values.
