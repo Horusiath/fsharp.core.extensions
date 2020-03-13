@@ -131,6 +131,7 @@ and [<Sealed;AllowNullLiteral>] internal RadixBranch<'a>() =
     [<DefaultValue>] val mutable keys: char[]
     /// Binary sorted list of current branch children.
     [<DefaultValue>] val mutable children: RadixNode<'a>[]
+                    
     static member Create(childrenCount: int, prefix: string, keys: char[], children: RadixNode<'a>[]): RadixBranch<'a> =
         let n = RadixBranch<'a>()
         n.childrenCount <- childrenCount
@@ -193,6 +194,37 @@ and [<Sealed;AllowNullLiteral>] internal RadixBranch<'a>() =
             consumed <- Math.Max(consumed, 0)
             let c = prefix.[consumed]
             Utils.search c this.keys this.childrenCount
+                
+    /// Returns a first descendant, which will contain all nodes starting with a given prefix.        
+    member this.FindDescendant(prefix: ReadOnlySpan<char>, exactMatch: bool) : RadixNode<'a> =
+        let mutable node = this :> RadixNode<'a>
+        let mutable depth = 0
+        let mutable prefix = prefix
+        let mutable cont = prefix.Length <> 0
+        while cont do
+            match node with
+            | :? RadixBranch<'a> as branch ->
+                let (index, consumed) = branch.FindChild(prefix)
+                if consumed = 0 || index = branch.childrenCount then
+                    node <- null
+                    cont <- false // we didn't consume prefix or none of the children match, we should stop
+                else
+                    prefix <- prefix.Slice(consumed)
+                    if prefix.Length = 0 then
+                        // we consumed entire prefix on this node, all children will match
+                        cont <- false
+                    else
+                        node <- (branch.children.[index])
+                        depth <- depth + consumed
+            | :? RadixLeaf<'a> as leaf ->
+                let leafSegment = leaf.Key.AsSpan().Slice(depth)
+                cont <- false
+                if exactMatch then
+                    if not(leafSegment.SequenceEqual(prefix)) then
+                        node <- null
+                else if not(leafSegment.StartsWith(prefix)) then
+                    node <- null
+        node
         
     member this.InsertAt(index: int, leaf: RadixLeaf<'a>, key: char): unit =
         if this.childrenCount = this.keys.Length then
@@ -293,7 +325,42 @@ type Radix<'a> internal (root: RadixBranch<'a>) =
     member internal this.Remove(key: ReadOnlySpan<char>, node: RadixLeaf<'a> outref): Radix<'a> =
         let builder = this.ToBuilder()
         if builder.Remove(key, &node) then builder.ToImmutable() else this
-    member internal this.FindLeaf(key: ReadOnlySpan<char>): RadixLeaf<'a> = failwith "not implemented"
+    member internal this.FindLeaf(key: ReadOnlySpan<char>) : RadixLeaf<'a> =
+        match root.FindDescendant(key, true) with
+        | :? RadixLeaf<'a> as leaf -> leaf
+        | _ -> null
+    member this.Prefixed(key: string) =
+        let start =
+            if key = "" then root :> RadixNode<'a>
+            else
+                let idx = Utils.search (key.[0]) root.keys root.childrenCount
+                if idx = key.Length then null
+                else
+                    match root.children.[idx] with
+                    | :? RadixBranch<'a> as branch -> branch.FindDescendant(key.AsSpan(), false)
+                    | other -> other
+        match start with
+        | null -> Seq.empty
+        | :? RadixLeaf<'a> as leaf -> Seq.singleton <| KeyValuePair<string,'a>(leaf.Key, leaf.Value)
+        | :? RadixBranch<'a> as branch -> seq {
+            let stack = Stack<RadixBranch<'a>>()
+            stack.Push branch
+            let mutable current = branch
+            while stack.Count <> 0 do
+                let mutable i = 0
+                while i < current.childrenCount do
+                    let child = current.children.[i]
+                    match child with
+                    | :? RadixLeaf<'a> as leaf ->
+                        if leaf.Key.StartsWith(key) then //TODO: we don't need to compare entire key
+                            yield KeyValuePair<string,'a>(leaf.Key, leaf.Value)
+                    | :? RadixBranch<'a> as child ->
+                        stack.Push current
+                        current <- child
+                        i <- 0
+                    i <- i + 1
+                current <- stack.Pop()
+        }
     member this.Equals(other: Radix<'a>): bool =
         let r1 = this.Root
         let r2 = other.Root
@@ -309,6 +376,7 @@ type Radix<'a> internal (root: RadixBranch<'a>) =
         match root with
         | null -> 0
         | node -> node.GetHashCode()
+    member this.GetEnumerator() = this.Prefixed("").GetEnumerator()
     override this.ToString() =
         let sb = System.Text.StringBuilder()
         sb.Append("{ ") |> ignore
@@ -320,34 +388,12 @@ type Radix<'a> internal (root: RadixBranch<'a>) =
             let current = e.Current
             sb.Append(", \"").Append(current.Key).Append("\": ").Append(current.Value) |> ignore
         sb.Append("}").ToString()
-    member this.GetEnumerator(): RadixEnumerator<'a> = failwith "not implemented"
     interface IEnumerable<KeyValuePair<string, 'a>> with
-        member this.GetEnumerator(): IEnumerator<KeyValuePair<string,'a>> = upcast this.GetEnumerator()
+        member this.GetEnumerator(): IEnumerator<KeyValuePair<string,'a>> = this.GetEnumerator()
         member this.GetEnumerator(): IEnumerator = upcast this.GetEnumerator()
     interface IEquatable<Radix<'a>> with
         member this.Equals(other) = this.Equals(other)
     
-and [<Struct>] RadixEnumerator<'a> internal(start: RadixLeaf<'a>, stop: RadixLeaf<'a>) =
-    [<DefaultValue>]
-    val mutable internal currentNode: RadixLeaf<'a>
-    member this.Current: KeyValuePair<string,'a> = KeyValuePair<_,_>(this.currentNode.Key, this.currentNode.Value)
-    member this.MoveNext(): bool =
-        if isNull start then false
-        elif isNull this.currentNode then
-            this.currentNode <- start
-            true
-        else
-            failwith "not implemented"
-            
-    member this.Reset() = this.currentNode <- null
-    interface IEnumerator<KeyValuePair<string, 'a>> with
-        member this.Current: obj = upcast this.Current
-        member this.Current: KeyValuePair<string, 'a> = this.Current
-        member this.MoveNext(): bool =
-            let mutable e = this
-            e.MoveNext()
-        member this.Reset() = this.Reset()
-        member this.Dispose() = ()
     
 and [<Sealed>] internal RadixBuilder<'a>(root: RadixBranch<'a>) =
     let mutable root = root
@@ -426,7 +472,7 @@ and [<Sealed>] internal RadixBuilder<'a>(root: RadixBranch<'a>) =
     member _.ToImmutable(): Radix<'a> =
         root.Freeze()
         Radix<'a> (root)
-    
+           
 [<RequireQualifiedAccess>]
 module Radix =
     
@@ -511,7 +557,7 @@ module Radix =
     let inline find (key: string) (map: Radix<'a>): 'a voption = findBySpan (key.AsSpan()) map
     
     /// Returns a sequence of all containing all entries having a given `prefix` in their keys.
-    let prefixed (prefix: string) (map: Radix<'a>): KeyValuePair<string, 'a> seq = failwith "not implemented"
+    let prefixed (prefix: string) (map: Radix<'a>): KeyValuePair<string, 'a> seq = map.Prefixed(prefix)
     
     let between (min: string) (max: string) (tree: Radix<'a>): KeyValuePair<string, 'a> seq =
         let cmp = min.CompareTo(max)
