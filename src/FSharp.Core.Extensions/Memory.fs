@@ -34,6 +34,8 @@ module Span =
         let p = NativePtr.stackalloc<'a> length |> NativePtr.toVoidPtr
         Span<'a>(p, length)
         
+    let inline ofSegment (s: ArraySegment<'a>) = Span(s.Array, s.Offset, s.Count)
+        
     /// Wraps provided array into a Span.
     let inline ofArray (a: 'a[]): Span<'a> = Span(a)
     
@@ -67,6 +69,8 @@ module ReadOnlySpan =
     
     /// Returns an empty span.
     let empty<'a> : ReadOnlySpan<'a> = ReadOnlySpan<'a>.Empty
+    
+    let inline ofSegment (s: ArraySegment<'a>) = ReadOnlySpan(s.Array, s.Offset, s.Count)
 
     /// Wraps provided array into a Span.
     let inline ofArray (a: 'a[]): ReadOnlySpan<'a> = ReadOnlySpan(a)
@@ -117,6 +121,8 @@ module Memory =
     /// Returned object is a disposable resource. 
     let inline rent(minCapacity: int): IMemoryOwner<_> = MemoryPool.Shared.Rent(minCapacity)
     
+    let inline ofSegment (s: ArraySegment<'a>) = Memory(s.Array, s.Offset, s.Count)
+    
     /// Wraps provided array into a memory.
     let inline ofArray (a: 'a[]): Memory<'a> = Memory(a)
     
@@ -153,6 +159,8 @@ module ReadOnlyMemory =
         
     /// Returns an empty span.
     let empty<'a> : ReadOnlyMemory<'a> = ReadOnlyMemory<'a>.Empty
+    
+    let inline ofSegment (s: ArraySegment<'a>) = ReadOnlyMemory(s.Array, s.Offset, s.Count)
 
     /// Wraps provided array into a memory.
     let inline ofArray (a: 'a[]): ReadOnlyMemory<'a> = ReadOnlyMemory(a)

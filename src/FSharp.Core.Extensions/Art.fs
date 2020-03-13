@@ -20,6 +20,7 @@ open System
 open System
 open System
 open System
+open System
 open System.Numerics
 open System.Collections.Generic
 open System.Runtime.CompilerServices
@@ -29,7 +30,7 @@ open System.Runtime.Intrinsics.X86
 open System.Text
 
 #nowarn "9"
-
+(*
 module internal ArtConst =
     let [<Literal>] Node4Size  = 4    // 0b00000000_00000100
     let [<Literal>] Node16Size  = 16   // 0b00000000_00010000
@@ -55,40 +56,29 @@ module internal ArtConst =
             n - ((i <<< 1) >>> 31)
     
     /// Equivalent of C's memmove 
-    let memmove (array: 'a[]) (index: int) (count: int) =
-        let mutable i = index + count
-        let mutable j = index
-        while i > index do
-            array.[i] <- array.[j]
-            i <- i - 1
-            j <- j - 1
-            
-    let utf8 (s: string): ArraySegment<byte> =
-        let array = Encoding.UTF8.GetBytes(s)
-        ArraySegment<_>(array, 0, array.Length)
+    let inline memmove (dst: Span<'a>) (src: ReadOnlySpan<'a>) =
+        src.CopyTo(dst)
         
 [<AbstractClass;AllowNullLiteral>]
 type internal ArtNode<'a>() =
     member this.IsLeaf: bool = this :? ArtLeaf<'a>
 
-and [<Sealed>] internal ArtLeaf<'a>(byteKey: byte[], key: string, value: 'a) as this =
+and [<Sealed>] internal ArtLeaf<'a>(key: ArraySegment<byte>, value: 'a) as this =
     inherit ArtNode<'a>()
-    [<DefaultValue(false)>] val mutable byteKey: byte[]
-    [<DefaultValue(false)>] val mutable key: string
+    [<DefaultValue(false)>] val mutable key: ArraySegment<byte>
     [<DefaultValue(false)>] val mutable value: 'a
     do
-        this.byteKey <- byteKey
         this.key <- key
         this.value <- value
-    member inline this.IsMatch(s: string) = this.key = s
+    member inline this.IsMatch(s: ReadOnlySpan<byte>) = s.SequenceEqual(ReadOnlySpan.ofSegment this.key)
     member this.LongestCommonPrefix(other: ArtLeaf<'a>, depth: int) =
         let rec loop (a: byte[]) (b: byte[]) maxCmp depth i=
             if i < maxCmp then
                 if a.[i] <> b.[i + depth] then i
                 else loop a b maxCmp depth (i+1)
             else i
-        let maxCmp = Math.Max(this.byteKey.Length, other.key.Length) - depth
-        loop this.byteKey other.byteKey maxCmp depth 0
+        let maxCmp = Math.Max(this.key.Count, other.key.Count) - depth
+        loop this.key other.key maxCmp depth 0
     
 and [<Sealed;AllowNullLiteral>] internal ArtBranch<'a>(flags: int, count: int, partial: ArraySegment<byte>, keys:byte[], children:ArtNode<'a>[]) as this =
     inherit ArtNode<'a>()
@@ -275,8 +265,11 @@ module internal ArtNode =
                 if bitfield = 0 then n.ChildrenCount
                 else
                     let i = ArtConst.ctz bitfield
-                    ArtConst.memmove n.Keys (i+1) (n.ChildrenCount-i)
-                    ArtConst.memmove n.Children (i+1) (n.ChildrenCount-i)
+                    let size = n.ChildrenCount - i
+                    let keys = Span<_>(n.Keys, i+1, size)
+                    let children = Span<_>(n.Children, i+1, size)
+                    ArtConst.memmove keys (ReadOnlySpan<_>(n.Keys, i, size))
+                    ArtConst.memmove children (ReadOnlySpan<_>(n.Children, i, size))
                     i
                     
             n.Keys.[idx] <- c;
@@ -294,8 +287,9 @@ module internal ArtNode =
                 elif c < n.Keys.[1] then 0
                 else 3
             // Shift to make space -> this should be memmove
-            ArtConst.memmove n.Keys (idx+1) (n.ChildrenCount-idx)
-            ArtConst.memmove n.Children (idx+1) (n.ChildrenCount-idx)
+            let size = n.ChildrenCount-idx
+            ArtConst.memmove (Span(n.Keys, idx+1, size)) (ReadOnlySpan(n.Keys, idx, size))
+            ArtConst.memmove (Span(n.Children, idx+1, size)) (ReadOnlySpan(n.Children, idx, size))
             // Insert element
             n.Keys.[idx] <- c
             n.Children.[idx] <- child
@@ -343,7 +337,7 @@ module internal ArtNode =
                 let branch' = branch.Copy newPrefix
                 let node' = node4 (ArraySegment(byteKey, branch.Partial.Offset, prefixDiff))
                 addUnsafe4 node' branch'.Partial.[prefixDiff] branch' |> ignore
-                ArtConst.memmove branch'.Partial.Array branch'.Partial.Offset (prefixDiff + 1)
+                ArtConst.memmove (Span(branch'.Partial.Array, prefixDiff + 1, branch'.PartialLength)) (ReadOnlySpan(branch'.Partial.Array, prefixDiff, branch'.PartialLength))
                 // Insert the new leaf
                 let leaf = leaf key byteKey value
                 addUnsafe4 node' byteKey.[depth+prefixDiff] leaf |> ignore
@@ -358,7 +352,108 @@ module internal ArtNode =
                     addUnsafe branch' byteKey.[depth+branch.PartialLength] leaf
                 | child ->
                     insert child key byteKey value (depth+branch'.PartialLength+1)
-
+                    
+    let removeChild256 (c: byte) (n: ArtBranch<'a> byref) =
+        n.Children.[int c] <- null 
+        n.childCount <- n.childCount - 1
+        // Resize to a node48 on underflow, not immediately to prevent
+        // trashing if we sit on the 48/49 boundary
+        if n.childCount = 47 then
+            let n' = ArtBranch<'a>(ArtConst.Node48, n.childCount, n.Partial, Array.zeroCreate 256, Array.zeroCreate 48)
+            let mutable pos = 0
+            for i=0 to 255 do
+                let child = n.Children.[i]
+                if not (isNull child) then
+                    n'.Children.[pos] <- child
+                    n'.Keys.[i] <- byte (pos + i)
+                    pos <- pos + 1
+            n <- n'
+            
+    let removeChild48 (c: byte) (n: ArtBranch<'a> byref) =
+        let mutable pos = n.Keys.[int c]
+        n.Keys.[int c] <- Unchecked.defaultof<_>
+        n.childCount <- n.childCount - 1
+        
+        if n.childCount = 12 then
+            let n' = ArtBranch<'a>(ArtConst.Node48, n.childCount, n.Partial, Array.zeroCreate 16, Array.zeroCreate 16)
+            let mutable child = 0
+            for i=0 to 255 do
+                pos <- n.Keys.[i]
+                if pos <> 0uy then
+                    n'.Keys.[child] <- byte i
+                    n'.Children.[child] <- n.Children.[int pos-1]
+                    child <- child + 1
+            n <- n'
+                    
+    let removeChild16 (c: byte) (n: ArtBranch<'a> byref) pos =
+        let size = n.ChildrenCount - 1 - pos
+        ArtConst.memmove (Span(n.Keys, pos, size)) (ReadOnlySpan(n.Keys, pos+1, size))
+        ArtConst.memmove (Span(n.Children, pos, size)) (ReadOnlySpan(n.Children, pos+1, size))
+        n.childCount <- n.childCount - 1
+        if n.childCount = 3 then
+           let n' = node4 n.Partial
+           //TODO: SIMD vectorize?
+           n'.Keys.[0] <- n.Keys.[0]
+           n'.Keys.[1] <- n.Keys.[1]
+           n'.Keys.[2] <- n.Keys.[2]
+           n'.Keys.[3] <- n.Keys.[3]
+           n'.Children.[0] <- n.Children.[0]
+           n'.Children.[1] <- n.Children.[1]
+           n'.Children.[2] <- n.Children.[2]
+           n'.Children.[3] <- n.Children.[3]
+           n <- n'           
+        
+    let removeChild4 (node: ArtNode<'a> byref) pos =
+        let n = node :?> ArtBranch<_>
+        let size = n.ChildrenCount - 1 - pos
+        ArtConst.memmove (Span(n.Keys, pos, size)) (ReadOnlySpan(n.Keys, pos+1, size))
+        ArtConst.memmove (Span(n.Children, pos, size)) (ReadOnlySpan(n.Children, pos+1, size))
+        n.childCount <- n.childCount - 1        
+        // Remove nodes with only a single child
+        if n.childCount = 1 then
+            let child = n.Children.[0]
+            if child.IsLeaf then
+                node <- child
+            else
+                // Concatenate the prefixes
+                let b = child :?> ArtBranch<_>
+                let arr = Array.zeroCreate (n.PartialLength + b.PartialLength)
+                Array.blit n.Partial.Array n.Partial.Offset arr 0 n.PartialLength
+                Array.blit b.Partial.Array b.Partial.Offset arr n.PartialLength b.PartialLength
+                node <- b.Copy(ArraySegment(arr, 0, arr.Length))
+                
+    let removeChild (n: ArtBranch<'a> byref) c pos =
+        match n.Type with
+        | ArtConst.Node4   -> removeChild4 &n pos
+        | ArtConst.Node16  -> removeChild16 c &n pos
+        | ArtConst.Node48  -> removeChild48 c &n
+        | ArtConst.Node256 -> removeChild256 c &n
+                
+    let rec remove (n: ArtNode<'a> byref) (key: byte[]) (depth: int): ArtNode<'a> =
+        if isNull n then null
+        elif n.IsLeaf then // Handle hitting a leaf node
+            let l = n :?> ArtLeaf<'a>
+            if l.IsMatch key then
+                n <- null
+                l
+            else null
+        else
+            let b = n :?> ArtBranch<'a>
+            let prefix = b.PrefixLength(key, depth)
+            if prefix <> b.PartialLength then null
+            else
+                let depth' = depth + b.PartialLength
+                let child = b.FindChild(key.[depth'])
+                if isNull child then null
+                elif child.IsLeaf then // If the child is leaf, delete from this node
+                    let l = child :?> ArtLeaf<'a>
+                    if l.IsMatch key then
+                        removeChild n child depth 
+                    else null
+                else remove child key depth'
+            
+            
+                                
 /// Immutable Adaptive Radix Tree (ART), which can be treated like `Map<byte[], 'a>`.
 /// Major advantage is prefix-based lookup capability.
 type Art<'a> internal(count: int, root: ArtNode<'a>) =
@@ -427,8 +522,7 @@ type Art<'a> internal(count: int, root: ArtNode<'a>) =
     
     static member Empty: Art<'a> = Art<'a>(0, ArtNode.leaf "" [||] Unchecked.defaultof<_>)
     member this.Count = count
-    member this.Search(phrase: string) =
-        let byteKey = Encoding.UTF8.GetBytes phrase
+    member this.Search(byteKey: ReadOnlySpan<byte>) =
         let mutable n = root
         let mutable depth = 0
         let mutable result = ValueNone
@@ -436,7 +530,7 @@ type Art<'a> internal(count: int, root: ArtNode<'a>) =
             if n.IsLeaf then
                 let leaf = n :?> ArtLeaf<'a>
                 // Check if the expanded path matches
-                if leaf.IsMatch phrase then
+                if leaf.IsMatch byteKey then
                     result <- ValueSome leaf.value
                 n <- null
             else
@@ -466,13 +560,18 @@ type Art<'a> internal(count: int, root: ArtNode<'a>) =
             let leaf = (ArtNode.max root)
             ValueSome (leaf.key, leaf.value)
         
-    member __.Add(key: string, value: 'a): Art<'a> =
+    member __.Add(key: ArraySegment<byte>, value: 'a): Art<'a> =
         let byteKey = ArtConst.utf8 key
         let root' = ArtNode.insert root key byteKey.Array value 0 
         Art<'a>(count+1, root')
         
+    member this.Remove(key: ReadOnlySpan<byte>): Art<'a> =
+        let byteKey = ArtConst.utf8 key
+        let root' = ArtNode.remove root byteKey.Array 0
+        if isNull root' then this else Art<'a>(count-1, root')
+        
     member this.GetEnumerator() = (iterate root).GetEnumerator()
-    member this.Prefixed(prefix: string) =
+    member this.Prefixed(prefix: ReadOnlySpan<byte>) =
         let byteKey = ArtConst.utf8 prefix
         iteratePrefix byteKey root
         
@@ -503,7 +602,7 @@ module Art =
 
     /// Inserts a new `value` under provided `key`, returning a new Adaptive Radix Tree in the result.
     /// If there was already another value under the provided `key`, it will be overriden.
-    let add (key: string) (value: 'a) (map: Art<'a>): Art<'a> = map.Add(key, value)
+    let add (key: ArraySegment<byte>) (value: 'a) (map: Art<'a>): Art<'a> = map.Add(key, value)
     
     /// Creates a new Adaptive Radix Tree out of provided tuple sequence.
     let ofSeq (seq: seq<string * 'a>): Art<'a> =
@@ -520,17 +619,17 @@ module Art =
         a
 
     /// Removes an entry for a provided `key` returning a new Adaptive Radix Tree without that element.
-    let remove (key: string) (map: Art<'a>): Art<'a> = failwith "not implemented"
+    let inline remove (key: ReadOnlySpan<byte>) (map: Art<'a>): Art<'a> = map.Remove(key)
     
     /// Tries to find a a value under provided `key`.
-    let inline tryFind (key: string) (map: Art<'a>): 'a voption = map.Search key
+    let inline tryFind (key: ReadOnlySpan<byte>) (map: Art<'a>): 'a voption = map.Search key
     
     /// Returns a sequence of key-value elements, which starts with a given `prefix`.
-    let inline prefixed (prefix: string) (map: Art<'a>): KeyValuePair<string, 'a> seq = map.Prefixed(prefix)
+    let inline prefixed (prefix: ReadOnlySpan<byte>) (map: Art<'a>): KeyValuePair<string, 'a> seq = map.Prefixed(prefix)
     
     /// Maps all key-value entries of a given Adaptive Radix Tree into new values using function `fn`,
     /// returning a new ART map with modified values.
-    let map (fn: string -> 'a -> 'b) (map: Art<'a>): Art<'b> =
+    let map (fn: ArraySegment<byte> -> 'a -> 'b) (map: Art<'a>): Art<'b> =
         let mutable b = empty
         if isEmpty map then b
         else
@@ -540,7 +639,7 @@ module Art =
     
     /// Filters all key-value entries of a given Adaptive Radix Tree into new values using predicate `fn`,
     /// returning a new ART map with only these entries, which satisfied given predicate.
-    let filter (fn: string -> 'a -> bool) (map: Art<'a>): Art<'a> =
+    let filter (fn: ArraySegment<byte> -> 'a -> bool) (map: Art<'a>): Art<'a> =
         if isEmpty map then map
         else
             //TODO: optimize case, when all map elements satisfy predicate - we can return old map then
@@ -552,8 +651,21 @@ module Art =
     
     /// Zips two maps together, combining the corresponding entries using provided function `fn`.
     /// Any element that was not found in either of the maps, will be omitted from the output.
-    let intersect (fn: string -> 'a -> 'b -> 'c) (a: Art<'a>) (b: Art<'b>): Art<'c> =
-        let inline compare (x: string) (y: string) = StringComparer.Ordinal.Compare(x, y)
+    let intersect (fn: ArraySegment<byte> -> 'a -> 'b -> 'c) (a: Art<'a>) (b: Art<'b>): Art<'c> =
+        let compare (x: ArraySegment<byte>) (y: ArraySegment<byte>) =
+            let mutable i = 0
+            let mutable cont = i < x.Count && i < y.Count
+            let mutable cmp = 0
+            while cont do
+                cmp <- x.Array.[x.Offset+i].CompareTo(y.Array.[y.Offset+i])
+                if cmp <> 0 then cont <- false
+                else
+                    i    <- i+1
+                    cont <- (i < x.Count && i < y.Count)
+            if cmp = 0 then
+                if i >= x.Count then 1 else -1
+            else cmp
+              
         let mutable c = Art<'c>.Empty
         if isEmpty a || isEmpty b then c 
         else
@@ -576,8 +688,20 @@ module Art =
     
     /// Combines two maps together, taking a union of their corresponding entries. If both maps have
     /// a value for the corresponding entry, a function 'fn` will be used to resolve conflict.
-    let union (fn: string -> 'a -> 'a -> 'a) (a: Art<'a>) (b: Art<'a>): Art<'a> = 
-        let inline compare (x: string) (y: string) = StringComparer.Ordinal.Compare(x, y)
+    let union (fn: ArraySegment<byte> -> 'a -> 'a -> 'a) (a: Art<'a>) (b: Art<'a>): Art<'a> =
+        let compare (x: ArraySegment<byte>) (y: ArraySegment<byte>) =
+            let mutable i = 0
+            let mutable cont = i < x.Count && i < y.Count
+            let mutable cmp = 0
+            while cont do
+                cmp <- x.Array.[x.Offset+i].CompareTo(y.Array.[y.Offset+i])
+                if cmp <> 0 then cont <- false
+                else
+                    i    <- i+1
+                    cont <- (i < x.Count && i < y.Count)
+            if cmp = 0 then
+                if i >= x.Count then 1 else -1
+            else cmp
         let mutable c = Art<'a>.Empty
         if isEmpty a || isEmpty b then c 
         else
@@ -599,4 +723,4 @@ module Art =
                     c <- add kva.Key kva.Value c
                     inProgress <- ea.MoveNext()
             c
-    
+*)
