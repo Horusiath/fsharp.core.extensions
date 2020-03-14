@@ -124,7 +124,7 @@ and [<Sealed;AllowNullLiteral>] internal RadixBranch<'a>() =
     [<DefaultValue>] val mutable shared: bool
     /// The common prefix shared between each of the children. Prefix is
     /// segmented over many branches if necessary - this field only contains
-    /// part unique for that branch. 
+    /// part unique for that branch.
     [<DefaultValue>] val mutable prefix: string
     /// Binary sorted array determining first character different between
     /// each of the `children`.

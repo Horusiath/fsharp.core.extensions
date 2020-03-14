@@ -8,8 +8,12 @@
     <Compile Include="VecBenchmarks.fs" />
     <Compile Include="EnumBenchmarks.fs" />
     <Compile Include="AtomicBenchmarks.fs" />
+    <Compile Include="RadixBenchmarks.fs" />
     <Compile Include="Program.fs" />
     <Content Include="paket.references" />
+    <Content Include="words.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\FSharp.Core.Extensions\FSharp.Core.Extensions.fsproj" />
