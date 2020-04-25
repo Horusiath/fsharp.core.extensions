@@ -7,8 +7,8 @@
     <Compile Include="Prolog.fs" />
     <Compile Include="Memory.fs" />
     <Compile Include="Atomic.fs" />
-    <Compile Include="Task.fs" />
     <Compile Include="Channels.fs" />
+    <Compile Include="Task.fs" />
     <Compile Include="Array.fs" />
     <Compile Include="LazyTask.fs" />
     <Compile Include="Hlc.fs" />

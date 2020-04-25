@@ -1,6 +1,7 @@
 namespace FSharp.Core
 
 open FSharp.Control.Tasks.Builders
+open FSharp.Control.Tasks.Builders
 open System.Collections.Generic
 open System.Runtime.ExceptionServices
 open System.Threading.Tasks
@@ -45,6 +46,8 @@ module Task =
     }
         
     let inline run (f: unit -> Task<'a>) : Task<'a> = Task.Run<'a>(Func<_>(f))
+    
+    let inline runCancellable (c: CancellationToken) (f: unit -> Task<'a>) : Task<'a> = Task.Run<'a>(Func<_>(f), c)
 
 type AsyncSeq<'a> = IAsyncEnumerable<'a>
 
@@ -561,6 +564,33 @@ module AsyncSeq =
                         return hasNext'
                     } }}
         
+        
+    let private skipWithinCallback = TimerCallback(fun state ->
+        let c = state :?> AtomicBool
+        (c.Swap false) |> ignore
+    )
+    
+    /// Modifies given async sequence into new one, which will skip incoming elements until a given time has passed.
+    let skipWithin (timeout: TimeSpan) (upstream: AsyncSeq<'a>) = 
+        { new AsyncSeq<'a> with
+            member __.GetAsyncEnumerator (cancel) =
+                let inner = upstream.GetAsyncEnumerator(cancel)
+                let skip = atom (timeout > TimeSpan.Zero)
+                let timer = new Timer(skipWithinCallback, skip, timeout, TimeSpan.Zero)
+                { new IAsyncEnumerator<'a> with
+                    member __.Current = inner.Current
+                    member __.DisposeAsync() =
+                        timer.Dispose()
+                        inner.DisposeAsync()
+                    member __.MoveNextAsync() = vtask {
+                        let mutable hasNext = not cancel.IsCancellationRequested
+                        while hasNext && skip.Value() do
+                            let! next = inner.MoveNextAsync()
+                            hasNext <- next
+                            
+                        return! inner.MoveNextAsync()                        
+                    } }}
+        
     /// Modifies given async sequence into new one, which will skip first `n` elements.
     let skip (n: int64) (upstream: AsyncSeq<'a>) = 
         { new AsyncSeq<'a> with
@@ -597,6 +627,29 @@ module AsyncSeq =
                         else return false
                     } }}
         
+    let private takeWithinCallback = TimerCallback(fun state ->
+        let c = state :?> CancellationTokenSource
+        c.Cancel()
+    )
+        
+    /// Modifies given async sequence into new one, which will produce elements until given timeout, then will complete.
+    let takeWithin (timeout: TimeSpan) (upstream: AsyncSeq<'a>) = 
+        { new AsyncSeq<'a> with
+            member __.GetAsyncEnumerator (cancel) =
+                let complete = CancellationTokenSource.CreateLinkedTokenSource(cancel)
+                let inner = upstream.GetAsyncEnumerator(complete.Token)
+                let timer = new Timer(takeWithinCallback, complete, timeout, TimeSpan.Zero)
+                { new IAsyncEnumerator<'a> with
+                    member __.Current = inner.Current
+                    member __.DisposeAsync() =
+                        complete.Dispose()
+                        timer.Dispose()
+                        inner.DisposeAsync()
+                    member __.MoveNextAsync() = vtask {
+                        if complete.IsCancellationRequested then return false
+                        else return! inner.MoveNextAsync()
+                    } }}
+        
     /// Modifies given async sequence into new one, which will only emit up to a given number of elements. 
     let take (n: int64) (upstream: AsyncSeq<'a>) = 
         { new AsyncSeq<'a> with
@@ -612,6 +665,51 @@ module AsyncSeq =
                             return! inner.MoveNextAsync()
                         else return false
                     } }}
+        
+    /// Splits upstream sequence into two, first producing items from an upstream as long as given `condition`
+    /// function is not satisfied. Once condition has been satisfied, current and all next elements will be
+    /// redirected into second sequence, while the first one will be completed.
+    let split (condition: 'a -> bool) (upstream: AsyncSeq<'a>) : (AsyncSeq<'a> * AsyncSeq<'a>) =
+        let fullfiled = TaskCompletionSource<bool>()
+        let before =
+            { new AsyncSeq<'a> with
+                member __.GetAsyncEnumerator (cancel) =
+                    let inner = upstream.GetAsyncEnumerator(cancel)
+                    let mutable current = Unchecked.defaultof<_>
+                    { new IAsyncEnumerator<'a> with
+                        member __.Current = current
+                        member __.DisposeAsync() = inner.DisposeAsync()
+                        member __.MoveNextAsync() = vtask {
+                            if cancel.IsCancellationRequested || fullfiled.Task.IsCompleted then return false
+                            else
+                                let! hasNext = inner.MoveNextAsync()
+                                if hasNext then
+                                    current <- inner.Current
+                                    let finish = condition current
+                                    if finish then
+                                        fullfiled.SetResult(hasNext)
+                                        return false
+                                    else return true
+                                else return false
+                        } }}
+        let after =
+            { new AsyncSeq<'a> with
+                member __.GetAsyncEnumerator (cancel) =
+                    let inner = upstream.GetAsyncEnumerator(cancel)
+                    let mutable awaiter = fullfiled
+                    { new IAsyncEnumerator<'a> with
+                        member __.Current = inner.Current
+                        member __.DisposeAsync() = inner.DisposeAsync()
+                        member __.MoveNextAsync() = vtask {
+                            if cancel.IsCancellationRequested then return false
+                            elif not (isNull awaiter) then
+                                let a = awaiter
+                                awaiter <- null
+                                return! a.Task
+                            else
+                                return! inner.MoveNextAsync()
+                        } }}
+        (before, after)
         
     /// Similar to fold, but it's not a terminal operation.
     /// An updated state is produced continuously as an output element.
@@ -635,8 +733,9 @@ module AsyncSeq =
                                 return false
                     } }}
     
-    /// Shifts an element emission in time by delaying it by specified timeout.   
-    let delay (timeout: TimeSpan) (upstream: AsyncSeq<'a>): AsyncSeq<'a> =
+    /// Shifts an element emission in time by delaying it by timeout generated by `timeoutFn` for that specific element.
+    /// Since delay uses a function, it's very easy to implement things like eg. exponential backoff.
+    let delay (timeoutFn: 'a -> TimeSpan) (upstream: AsyncSeq<'a>): AsyncSeq<'a> =
         { new AsyncSeq<'a> with
             member __.GetAsyncEnumerator (cancel) =
                 let inner = upstream.GetAsyncEnumerator(cancel)
@@ -646,15 +745,20 @@ module AsyncSeq =
                     member __.MoveNextAsync() = vtask {
                         if cancel.IsCancellationRequested then return false
                         else
-                            do! Task.Delay(timeout)
-                            return! inner.MoveNextAsync()
-                    } }}
+                            let! hasNext = inner.MoveNextAsync()
+                            if not hasNext then return false
+                            else
+                                let timeout = timeoutFn inner.Current
+                                do! Task.Delay(timeout, cancel)
+                                return true
+                    } } }
+        
     
     /// Groups incoming elements into chunks of size `n`, and returns an async sequence of chunks.
     /// Once input sequence completes, it will produce a final chunk (potentially smaller than `n`)
     /// before completing itself. 
     let grouped (n: int) (upstream: AsyncSeq<'a>): AsyncSeq<'a[]> =
-        if n <= 0 then raise (ArgumentException "AsyncSeq.buffered buffer size must be positive number")
+        if n <= 0 then raise (ArgumentException "AsyncSeq.grouped buffer size must be positive number")
         else
             { new AsyncSeq<'a[]> with
                 member __.GetAsyncEnumerator (cancel) =
@@ -691,6 +795,48 @@ module AsyncSeq =
                                     ready <- true
                                 return ready
                         } }}
+
+    /// Pulls upstream asynchronously from elements produced downstream, backpressuring when upstream has been pulled
+    /// up to `maxBufferSize` times before a single pull from downstream arrived. This can be useful when downstream
+    /// pulls at slower rate than upstream is ready to produce its elements.
+    let buffered (maxBufferSize: int) (upstream: AsyncSeq<'a>): AsyncSeq<'a[]> =
+        if maxBufferSize <= 0 then raise (ArgumentException "AsyncSeq.buffered buffer size must be positive number")
+        else
+            { new AsyncSeq<'a[]> with
+                member __.GetAsyncEnumerator (cancel) =
+                    let inner = upstream.GetAsyncEnumerator(cancel)
+                    let (writer, reader) =
+                        let ch = Channel.CreateBounded<'a>(BoundedChannelOptions(maxBufferSize, SingleReader=true, SingleWriter=true))
+                        ch.Writer, ch.Reader
+                    let pullWorker = Task.runCancellable cancel (fun () -> task {
+                        let mutable hasNext = not cancel.IsCancellationRequested
+                        while hasNext && not cancel.IsCancellationRequested do
+                            let! next = inner.MoveNextAsync()
+                            hasNext <- next
+                            if not (writer.TryWrite(inner.Current)) then
+                                let! next = writer.WaitToWriteAsync(cancel)
+                                hasNext <- hasNext && next
+                    })
+                    let mutable current = Unchecked.defaultof<_>
+                    //NOTE: it would be great if channel had sometime like `let count = reader.TryReadTo(Span<'a>(current))`
+                    let buf = Array.zeroCreate maxBufferSize
+                    { new IAsyncEnumerator<'a[]> with
+                        member __.Current = current
+                        member __.DisposeAsync() =
+                            pullWorker.Dispose() 
+                            inner.DisposeAsync()
+                        member __.MoveNextAsync() = vtask {
+                            let! hasItems = reader.WaitToReadAsync(cancel)
+                            if hasItems then
+                                let span = Span.ofArray buf
+                                let read = Channel.tryReadTo span reader
+                                current <- span.Slice(0, read).ToArray()                                
+                                return true
+                            else
+                                current <- Unchecked.defaultof<_>
+                                return false
+                        } }}
+        
     
     /// Zips two async sequences together producing an output as transformation of elements of corresponding elements.
     /// Whenever one of the async sequences completes, the result will also complete.

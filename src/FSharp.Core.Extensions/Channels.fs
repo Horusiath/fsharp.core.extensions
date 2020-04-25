@@ -1,5 +1,6 @@
-namespace FSharp.Core.Extensions
+namespace FSharp.Core
 
+open System
 open FSharp.Control.Tasks.Builders
 open System.Threading.Channels
 open System.Threading.Tasks
@@ -17,6 +18,16 @@ module Channel =
     let inline unboundedMpsc<'a> () : (ChannelWriter<'a> * ChannelReader<'a>) =
         let ch = Channel.CreateUnbounded(UnboundedChannelOptions(SingleReader=true))
         (ch.Writer, ch.Reader)
+        
+    /// Tries to read as much elements as possible from a given reader to fill provided span
+    /// without blocking.
+    let tryReadTo (span: Span<'a>) (reader: ChannelReader<'a>) : int =
+        let mutable i = 0
+        let mutable item = Unchecked.defaultof<_>
+        while i < span.Length && reader.TryRead(&item) do
+            span.[i] <- item
+            i <- i+1
+        i
     
     /// Listens or multiple channels, returning value from the one which completed first.
     /// Order in which channels where provided will be assumed priority order in case

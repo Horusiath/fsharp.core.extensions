@@ -211,7 +211,7 @@ let tests =
             let t =
                 [1L..5L]
                 |> AsyncSeq.ofSeq
-                |> AsyncSeq.delay (TimeSpan.FromMilliseconds 100.)
+                |> AsyncSeq.delay (fun _ -> TimeSpan.FromMilliseconds 100.)
                 |> AsyncSeq.iter (fun i -> unitVtask {
                     let elapsed = sw.ElapsedMilliseconds
                     Expect.isGreaterThanOrEqual elapsed (i*100L) (sprintf "delayed element [%i] should comply to delay lower bound" i)
@@ -348,9 +348,9 @@ let tests =
         
         testCase "mergeParallel should return all combined results" <| fun _ ->
             let seqs = [|
-                AsyncSeq.ofSeq [1;1] |> AsyncSeq.delay (TimeSpan.FromMilliseconds 100.)
-                AsyncSeq.ofSeq [2;2;2] |> AsyncSeq.delay (TimeSpan.FromMilliseconds 100.)
-                AsyncSeq.ofSeq [3;3;3;3] |> AsyncSeq.delay (TimeSpan.FromMilliseconds 100.)
+                AsyncSeq.ofSeq [1;1] |> AsyncSeq.delay (fun _ -> TimeSpan.FromMilliseconds 100.)
+                AsyncSeq.ofSeq [2;2;2] |> AsyncSeq.delay (fun _ -> TimeSpan.FromMilliseconds 100.)
+                AsyncSeq.ofSeq [3;3;3;3] |> AsyncSeq.delay (fun _ -> TimeSpan.FromMilliseconds 100.)
             |]
             let sw = System.Diagnostics.Stopwatch()
             sw.Start()
