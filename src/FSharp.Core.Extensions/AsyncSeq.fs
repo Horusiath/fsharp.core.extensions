@@ -826,7 +826,6 @@ module AsyncSeq =
                                 hasNext <- hasNext && next
                     })
                     let mutable current = Unchecked.defaultof<_>
-                    //NOTE: it would be great if channel had sometime like `let count = reader.TryReadTo(Span<'a>(current))`
                     let buf = Array.zeroCreate maxBufferSize
                     { new IAsyncEnumerator<'a[]> with
                         member __.Current = current
@@ -837,7 +836,7 @@ module AsyncSeq =
                             let! hasItems = reader.WaitToReadAsync(cancel)
                             if hasItems then
                                 let span = Span.ofArray buf
-                                let read = Channel.tryReadTo span reader
+                                let read = Channel.readTo span reader
                                 current <- span.Slice(0, read).ToArray()                                
                                 return true
                             else
@@ -894,7 +893,7 @@ module AsyncSeq =
                 }
         }
     
-    let zip (left: AsyncSeq<'a>) (right: AsyncSeq<'b>): AsyncSeq<'a * 'b> = zipWith id left right
+    let inline zip (left: AsyncSeq<'a>) (right: AsyncSeq<'b>): AsyncSeq<'a * 'b> = zipWith id left right
     
     /// Creates an async sequence out of a given synchronous sequence.
     let ofSeq (s: 'a seq): AsyncSeq<'a> =
@@ -932,27 +931,6 @@ module AsyncSeq =
                             | None ->
                                 return false
                     } } }
-     
-    /// Wraps given `task` with an async sequence, which will emit a result of a task and then complete. 
-    let ofTask (task: Task<'a>): AsyncSeq<'a> = 
-        { new AsyncSeq<'a> with
-            member __.GetAsyncEnumerator (cancel) =
-                let mutable completed = false
-                { new IAsyncEnumerator<'a> with
-                    member __.Current = task.Result
-                    member __.DisposeAsync() = task.Dispose(); ValueTask()
-                    member __.MoveNextAsync() = vtask {
-                        if completed then return false
-                        else
-                            if task.IsCompletedSuccessfully then
-                                completed <- true
-                                return true
-                            elif task.IsCanceled then return false
-                            else
-                                let! _ = task
-                                completed <- true
-                                return true
-                    } } }
         
     /// Wraps given Task producing function with an async sequence, which will emit a result of a task and then complete.
     /// A cancellation token passed from async enumerator can be used within task produced function to interrupt it.
@@ -976,6 +954,9 @@ module AsyncSeq =
                                 completed <- true
                                 return true
                     } } }
+     
+    /// Wraps given `task` with an async sequence, which will emit a result of a task and then complete. 
+    let ofTask (task: Task<'a>): AsyncSeq<'a> = ofTaskCancellable (fun _ -> task)
         
     /// Wraps given Async with an async sequence, which will emit a result of a task and then complete.
     let ofAsync (a: Async<'a>): AsyncSeq<'a> = 
@@ -1030,9 +1011,9 @@ module AsyncSeq =
     /// Returns an async sequence, that reads elements from a given channel reader.
     let inline ofChannel (ch: ChannelReader<'a>): AsyncSeq<'a> = ch.ReadAllAsync()
         
-    /// Attaches a defered function to a current async sequence, which will be called once a corresponding async
+    /// Attaches a deferred function to a current async sequence, which will be called once a corresponding async
     /// enumerator will be completed.  
-    let defer (f: unit -> ValueTask) (upstream: AsyncSeq<'a>): AsyncSeq<'a> =
+    let onComplete (f: unit -> ValueTask) (upstream: AsyncSeq<'a>): AsyncSeq<'a> =
         { new AsyncSeq<'a> with
             member __.GetAsyncEnumerator (cancel) =
                 let inner = upstream.GetAsyncEnumerator(cancel)
@@ -1046,8 +1027,9 @@ module AsyncSeq =
                             do! f()
                             step <- 2
                         with ex ->
+                            // ensure that we call defer function even if dispose async failed, but not call it twice
                             if step < 2 then
-                                do! f()
+                                do! f() 
                             return rethrow ex }
                     member __.MoveNextAsync() = inner.MoveNextAsync() } }
 

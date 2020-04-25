@@ -34,3 +34,33 @@ type System.TimeSpan with
     /// Multiplies given time span by a given number of `times` eg. 2.sec * 2 => 4.sec.
     static member (*) (time: TimeSpan, times: int): TimeSpan =
         TimeSpan(int64 (time.Ticks * int64 times))
+        
+[<RequireQualifiedAccess>]
+module Map =
+    
+    /// Inserts or updates value under provided `key` (if it existed before) using function `fn`.
+    let upsert (key: 'k) (fn: 'v option -> 'v) (map: Map<'k,'v>) : Map<'k,'v> =
+        let nval = map |> Map.tryFind key |> fn
+        Map.add key nval map
+        
+    /// Builds a union of two maps. In case when both maps have entries with the same given key,
+    /// function `fn` will be used to reconcile the result value in output map.
+    let union (fn: 'k -> 'v -> 'v -> 'v) (a: Map<'k,'v>) (b: Map<'k,'v>): Map<'k,'v> =
+        let mutable m = a
+        for e in b do
+            let key = e.Key
+            let bval = e.Value
+            let ok, aval = a.TryGetValue(key)
+            m <- Map.add key (if ok then fn key aval bval else bval) m
+        m
+        
+    /// Builds an intersection of two maps using function `fn` to produce an output value
+    let intersect (fn: 'k -> 'v -> 'v -> 'v2) (a: Map<'k,'v>) (b: Map<'k,'v>): Map<'k,'v2> =
+        let mutable m = Map.empty
+        for e in b do
+            let key = e.Key
+            let bval = e.Value
+            let ok, aval = a.TryGetValue(key)
+            if ok then
+                m <- Map.add key (fn key aval bval) m
+        m

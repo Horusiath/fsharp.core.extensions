@@ -21,7 +21,7 @@ module Channel =
         
     /// Tries to read as much elements as possible from a given reader to fill provided span
     /// without blocking.
-    let tryReadTo (span: Span<'a>) (reader: ChannelReader<'a>) : int =
+    let readTo (span: Span<'a>) (reader: ChannelReader<'a>) : int =
         let mutable i = 0
         let mutable item = Unchecked.defaultof<_>
         while i < span.Length && reader.TryRead(&item) do
