@@ -20,21 +20,6 @@ open System
 open System.Threading
 open System.Threading.Tasks
 
-[<RequireQualifiedAccess>]
-module Task =
-    
-    let private complete (promise: TaskCompletionSource<'a>) (t: Task<'a>) =
-        if t.IsCompletedSuccessfully then promise.TrySetResult(t.Result)
-        elif t.IsCanceled then promise.TrySetCanceled()
-        else promise.TrySetException(t.Exception)
-        |> ignore
-    
-    /// Redirects the result of provided `task` execution into given TaskCompletionSource,
-    /// completing it, cancelling or rejecting depending on a given task output.
-    let fulfill (promise: TaskCompletionSource<'a>) (task: Task<'a>) =
-        if task.IsCompleted then complete promise task // short path for immediately completed tasks
-        else task.ContinueWith(Action<_>(complete promise), TaskContinuationOptions.ExecuteSynchronously|||TaskContinuationOptions.AttachedToParent) |> ignore
-
 /// An object, which is supposed to work like a lazy wrapper,
 /// but for functions that are returning results asynchronously.
 [<Sealed>]

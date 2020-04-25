@@ -7,7 +7,44 @@ open System.Threading.Tasks
 open System.Threading
 open System
 open System
+open System.Threading
 open System.Threading.Channels
+
+[<RequireQualifiedAccess>]
+module Task =
+    
+    let private complete (promise: TaskCompletionSource<'a>) (t: Task<'a>) =
+        if t.IsCompletedSuccessfully then promise.TrySetResult(t.Result)
+        elif t.IsCanceled then promise.TrySetCanceled()
+        else promise.TrySetException(t.Exception)
+        |> ignore
+    
+    /// Redirects the result of provided `task` execution into given TaskCompletionSource,
+    /// completing it, cancelling or rejecting depending on a given task output.
+    let fulfill (promise: TaskCompletionSource<'a>) (task: Task<'a>) =
+        if task.IsCompleted then complete promise task // short path for immediately completed tasks
+        else task.ContinueWith(Action<_>(complete promise), TaskContinuationOptions.ExecuteSynchronously|||TaskContinuationOptions.AttachedToParent) |> ignore
+
+    /// Converts a `Task<'a>` into `Task` (untyped, with no result type).
+    let inline ignore (t: Task<'a>) : Task = upcast t
+    
+    /// Maps result value produced by given task, returning new task in the result.
+    let map (f: 'a -> 'b) (t: Task<'a>) : Task<'b> =
+        if not t.IsCompleted then
+            t.ContinueWith(Func<Task<'a>, 'b>(fun t -> f t.Result), TaskContinuationOptions.ExecuteSynchronously|||TaskContinuationOptions.NotOnCanceled|||TaskContinuationOptions.NotOnFaulted)
+        elif t.IsCompletedSuccessfully then Task.FromResult(f t.Result)
+        else Task.FromException<'b>(if isNull t.Exception then TaskCanceledException(t) :> exn else upcast t.Exception)
+        
+    /// Converts task's exception channel into Error case of returned Result type.
+    let secure (t: Task<'a>) : Task<Result<'a,exn>> = task {
+        try
+            let! result = t
+            return Ok result
+        with e ->
+            return Error e
+    }
+        
+    let inline run (f: unit -> Task<'a>) : Task<'a> = Task.Run<'a>(Func<_>(f))
 
 type AsyncSeq<'a> = IAsyncEnumerable<'a>
 
@@ -20,9 +57,9 @@ module AsyncSeq =
         
     /// Modifies provided async sequence into the one which will apply
     /// a provided cancellation token upon async enumerator creation.
-    let withCancellation (cancel: CancellationToken) (aseq: AsyncSeq<'a>): AsyncSeq<'a> =
+    let withCancellation (cancel: CancellationToken) (upstream: AsyncSeq<'a>): AsyncSeq<'a> =
         { new AsyncSeq<'a> with
-            member __.GetAsyncEnumerator _ = aseq.GetAsyncEnumerator(cancel) }
+            member __.GetAsyncEnumerator _ = upstream.GetAsyncEnumerator(cancel) }
        
     /// Returns an empty async sequence.
     let empty<'a> : AsyncSeq<'a> =
@@ -44,10 +81,39 @@ module AsyncSeq =
                         if cancel.IsCancellationRequested then ValueTask<_>(false)
                         else ValueTask<_>(true) } }
         
+    let private timerCallback = TimerCallback(fun state ->
+        let promise = state :?> TaskCompletionSource<unit> ref
+        (!promise).TrySetResult(()) |> ignore
+    )
+        
+    /// Returns the stream, that will produce new element in given time intervals.
+    /// Produced value is the time that has passed since previous completion of MoveNextAsync enumerator call.
+    let timer (interval: TimeSpan): AsyncSeq<TimeSpan> =
+        { new AsyncSeq<TimeSpan> with
+            member __.GetAsyncEnumerator (cancel) =
+                let stopwatch = System.Diagnostics.Stopwatch.StartNew()
+                let promise = ref (TaskCompletionSource<unit>())
+                let timer = new Timer(timerCallback, promise, interval, interval)
+                let mutable current = Unchecked.defaultof<_>
+                { new IAsyncEnumerator<TimeSpan> with
+                    member __.Current = current
+                    member __.DisposeAsync() =
+                        stopwatch.Stop()
+                        timer.DisposeAsync()
+                    member __.MoveNextAsync() = vtask {
+                        if cancel.IsCancellationRequested then return false
+                        else
+                            do! (!promise).Task
+                            promise := TaskCompletionSource<unit>()
+                            current <- stopwatch.Elapsed
+                            stopwatch.Restart()
+                            return true
+                    } } }
+        
     /// Returns a task, which will pull all incoming elements from a given sequence
     /// or until token has cancelled, and pushes them to a given channel writer.
-    let into (chan: ChannelWriter<'a>) (aseq: AsyncSeq<'a>) = vtask {
-        let e = aseq.GetAsyncEnumerator()
+    let into (chan: ChannelWriter<'a>) (upstream: AsyncSeq<'a>) = vtask {
+        let e = upstream.GetAsyncEnumerator()
         try
             let! hasNext = e.MoveNextAsync()
             let mutable hasNext' = hasNext
@@ -64,8 +130,8 @@ module AsyncSeq =
             
     /// Tries to return the first element of the async sequence,
     /// returning None if sequence is empty or cancellation was called.
-    let tryHead (aseq: AsyncSeq<'a>) = vtask {
-        let e = aseq.GetAsyncEnumerator()
+    let tryHead (upstream: AsyncSeq<'a>) = vtask {
+        let e = upstream.GetAsyncEnumerator()
         try
             let! hasNext = e.MoveNextAsync()
             if hasNext then
@@ -81,8 +147,8 @@ module AsyncSeq =
     
     /// Tries to return the last element of the async sequence,
     /// returning None if sequence is empty or cancellation was called.
-    let tryLast (aseq: AsyncSeq<'a>) = vtask {
-        let e = aseq.GetAsyncEnumerator()
+    let tryLast (upstream: AsyncSeq<'a>) = vtask {
+        let e = upstream.GetAsyncEnumerator()
         try
             let! hasNext = e.MoveNextAsync()
             let mutable hasNext' = hasNext
@@ -104,8 +170,8 @@ module AsyncSeq =
 
     /// Collects all of the incoming events into a single sequence, which is then
     /// returned, once async sequence completes.
-    let collect (aseq: AsyncSeq<'a>): ValueTask<'a seq> = vtask {
-        let e = aseq.GetAsyncEnumerator()
+    let collect (upstream: AsyncSeq<'a>): ValueTask<'a[]> = vtask {
+        let e = upstream.GetAsyncEnumerator()
         try
             let! hasNext = e.MoveNextAsync()
             let mutable hasNext' = hasNext
@@ -115,7 +181,7 @@ module AsyncSeq =
                 let! hasNext = e.MoveNextAsync()
                 hasNext' <- hasNext
             do! e.DisposeAsync()
-            return upcast result
+            return result.ToArray()
         with ex ->
             do! e.DisposeAsync()
             return rethrow ex
@@ -124,8 +190,8 @@ module AsyncSeq =
     /// Asynchronously folds over incoming elements, continuously constructing
     /// the output state (starting from provided seed) and returning it eventually
     /// when a sequence will complete. 
-    let fold (f: 's -> 'a -> ValueTask<'s>) (seed: 's) (aseq: AsyncSeq<'a>) = vtask {
-        let e = aseq.GetAsyncEnumerator()
+    let fold (f: 's -> 'a -> ValueTask<'s>) (seed: 's) (upstream: AsyncSeq<'a>) = vtask {
+        let e = upstream.GetAsyncEnumerator()
         try
             let! cont = e.MoveNextAsync()
             let mutable state = seed
@@ -141,11 +207,29 @@ module AsyncSeq =
             return rethrow ex
     }
     
+    /// Stream the result as long as unfolding function `f` returns Some.
+    let unfold (f: 's -> ValueTask<ValueTuple<'s,'a> voption>) (seed: 's) = 
+        { new AsyncSeq<'a> with
+            member __.GetAsyncEnumerator (cancel) =
+                let mutable current = Unchecked.defaultof<_>
+                let mutable state = seed
+                { new IAsyncEnumerator<'a> with
+                    member __.Current = current
+                    member __.DisposeAsync() = ValueTask()
+                    member __.MoveNextAsync() = vtask {
+                        match! f state with
+                        | ValueNone -> return false
+                        | ValueSome(struct(state', item)) ->
+                            state <- state'
+                            current <- item
+                            return true
+                    } }}
+    
     /// Asynchronously folds over incoming elements, continuously constructing
     /// the output state (or returning with none if sequence had no elements)
     /// and returning it eventually when a sequence will complete. 
-    let reduce (f: 'a -> 'a -> ValueTask<'a>) (aseq: AsyncSeq<'a>) = vtask {
-        let e = aseq.GetAsyncEnumerator()
+    let reduce (f: 'a -> 'a -> ValueTask<'a>) (upstream: AsyncSeq<'a>) = vtask {
+        let e = upstream.GetAsyncEnumerator()
         try
             let! cont = e.MoveNextAsync()
             if not cont then return None
@@ -167,8 +251,8 @@ module AsyncSeq =
     /// Iterates over all elements of provided async sequence - or until a
     /// cancellation is called - and executes given action over every one
     /// of them with an incrementally growing counter.
-    let iteri (f: int64 -> 'a -> ValueTask) (aseq: AsyncSeq<'a>) = unitVtask {
-        let e = aseq.GetAsyncEnumerator()
+    let iteri (f: int64 -> 'a -> ValueTask) (upstream: AsyncSeq<'a>) = unitVtask {
+        let e = upstream.GetAsyncEnumerator()
         try
             let! cont = e.MoveNextAsync()
             let mutable hasNext = cont
@@ -186,8 +270,8 @@ module AsyncSeq =
     
     /// Iterates over all elements of provided async sequence - or until a cancellation
     /// is called - and executes given action over every one of them.
-    let inline iter (f: 'a -> ValueTask) aseq = iteri (fun _ e -> f e) aseq
-    
+    let inline iter (f: 'a -> ValueTask) upstream = iteri (fun _ e -> f e) upstream
+        
     [<Sealed>]
     type private MapParallelEnumerator<'a, 'b>(parallelism: int, e: IAsyncEnumerator<'a>, cancel:CancellationToken, map: 'a -> ValueTask<'b>) =
         let input = Channel.CreateBounded<'a>(parallelism)
@@ -231,17 +315,17 @@ module AsyncSeq =
             }
     
     /// Iterates over all elements of provided async sequence in parallel.
-    let mapParallel (parallelism: int) (f: 'a -> ValueTask<'b>) (aseq: AsyncSeq<'a>): AsyncSeq<'b> =
+    let mapParallel (parallelism: int) (f: 'a -> ValueTask<'b>) (upstream: AsyncSeq<'a>): AsyncSeq<'b> =
         { new AsyncSeq<'b> with
             member __.GetAsyncEnumerator (cancel) =
-                upcast MapParallelEnumerator<'a, 'b>(parallelism, aseq.GetAsyncEnumerator(cancel), cancel, f) }
+                upcast MapParallelEnumerator<'a, 'b>(parallelism, upstream.GetAsyncEnumerator(cancel), cancel, f) }
             
     /// Returns a new async sequence constructed from provided one transformed by applying
     /// mapping function (with monotonically increasing counter) over all input elements.
-    let mapAsynci (f: int64 -> 'a -> ValueTask<'b>) (aseq: AsyncSeq<'a>): AsyncSeq<'b> =
+    let mapAsynci (f: int64 -> 'a -> ValueTask<'b>) (upstream: AsyncSeq<'a>): AsyncSeq<'b> =
         { new AsyncSeq<'b> with
             member __.GetAsyncEnumerator (cancel) =
-                let inner = aseq.GetAsyncEnumerator(cancel)
+                let inner = upstream.GetAsyncEnumerator(cancel)
                 let current = ref Unchecked.defaultof<_>
                 let mutable counter = 0L
                 { new IAsyncEnumerator<'b> with
@@ -261,14 +345,14 @@ module AsyncSeq =
       
     /// Returns a new async sequence constructed from provided one transformed by applying
     /// mapping function over all input elements.  
-    let inline mapAsync (f: 'a -> ValueTask<'b>) aseq = mapAsynci (fun _ a -> f a) aseq
+    let inline mapAsync (f: 'a -> ValueTask<'b>) upstream = mapAsynci (fun _ a -> f a) upstream
     
     /// Returns a new async sequence constructed from provided one transformed by applying
     /// mapping function (with monotonically increasing counter) over all input elements.
-    let mapi (f: int64 -> 'a -> 'b) (aseq: AsyncSeq<'a>): AsyncSeq<'b> =
+    let mapi (f: int64 -> 'a -> 'b) (upstream: AsyncSeq<'a>): AsyncSeq<'b> =
         { new AsyncSeq<'b> with
             member __.GetAsyncEnumerator (cancel) =
-                let inner = aseq.GetAsyncEnumerator(cancel)
+                let inner = upstream.GetAsyncEnumerator(cancel)
                 let mutable current = Unchecked.defaultof<_>
                 let mutable counter = 0L
                 { new IAsyncEnumerator<'b> with
@@ -287,10 +371,10 @@ module AsyncSeq =
       
     /// Returns a new async sequence constructed from provided one transformed by applying
     /// mapping function over all input elements.  
-    let inline map (f: 'a -> 'b) (aseq: AsyncSeq<'a>): AsyncSeq<'b> =
+    let inline map (f: 'a -> 'b) (upstream: AsyncSeq<'a>): AsyncSeq<'b> =
         { new AsyncSeq<'b> with
             member __.GetAsyncEnumerator (cancel) =
-                let inner = aseq.GetAsyncEnumerator(cancel)
+                let inner = upstream.GetAsyncEnumerator(cancel)
                 let mutable current = Unchecked.defaultof<_>
                 { new IAsyncEnumerator<'b> with
                     member __.Current = current
@@ -304,10 +388,10 @@ module AsyncSeq =
     
     /// Creates an async sequence, that transforms provided inputs into outputs, potentially
     /// asynchronously, if the mapping function output will be some (none results will be skipped). 
-    let choose (f: 'a -> ValueTask<'b option>) (aseq: AsyncSeq<'a>): AsyncSeq<'b> =
+    let choose (f: 'a -> ValueTask<'b option>) (upstream: AsyncSeq<'a>): AsyncSeq<'b> =
         { new AsyncSeq<'b> with
             member __.GetAsyncEnumerator (cancel) =
-                let inner = aseq.GetAsyncEnumerator(cancel)
+                let inner = upstream.GetAsyncEnumerator(cancel)
                 let mutable current = None
                 { new IAsyncEnumerator<'b> with
                     member __.Current = current.Value
@@ -329,8 +413,8 @@ module AsyncSeq =
     
     /// Returns an async sequence which filters out the input async sequence elements,
     /// which have not satisfied given predicate.
-    let filter (f: 'a -> bool) (aseq: AsyncSeq<'a>): AsyncSeq<'a> =
-        choose (fun a -> if f a then ValueTask<_>(Some a) else ValueTask<_> None) aseq
+    let filter (f: 'a -> bool) (upstream: AsyncSeq<'a>): AsyncSeq<'a> =
+        choose (fun a -> if f a then ValueTask<_>(Some a) else ValueTask<_> None) upstream
 
     [<Sealed>]
     type private MergeParallelEnumerator<'a>(enums: ResizeArray<IAsyncEnumerator<'a>>, cancel: CancellationToken) =
@@ -417,10 +501,10 @@ module AsyncSeq =
     /// Given an async sequence which for a given input will produce the next sub-sequence
     /// and then returns an async sequence which flattens the results produced by sub-sequences
     /// until all sub-sequences produces will be completed.
-    let bind (f: 'a -> AsyncSeq<'b>) (aseq: AsyncSeq<'a>): AsyncSeq<'b> =
+    let bind (f: 'a -> AsyncSeq<'b>) (upstream: AsyncSeq<'a>): AsyncSeq<'b> =
         { new AsyncSeq<'b> with
             member __.GetAsyncEnumerator (cancel) =
-                let outer = aseq.GetAsyncEnumerator(cancel)
+                let outer = upstream.GetAsyncEnumerator(cancel)
                 let mutable inner = Unchecked.defaultof<IAsyncEnumerator<'b>>
                 let rec next () = vtask {
                     let! hasNext = inner.MoveNextAsync()
@@ -457,10 +541,10 @@ module AsyncSeq =
                     } }}
     
     /// Modifies given async sequence into new one, which will skip incoming elements as long as predicate is satisfied.
-    let skipWhile (f: 'a -> bool) (aseq: AsyncSeq<'a>) = 
+    let skipWhile (f: 'a -> bool) (upstream: AsyncSeq<'a>) = 
         { new AsyncSeq<'a> with
             member __.GetAsyncEnumerator (cancel) =
-                let inner = aseq.GetAsyncEnumerator(cancel)
+                let inner = upstream.GetAsyncEnumerator(cancel)
                 let mutable skip = true
                 { new IAsyncEnumerator<'a> with
                     member __.Current = inner.Current
@@ -478,10 +562,10 @@ module AsyncSeq =
                     } }}
         
     /// Modifies given async sequence into new one, which will skip first `n` elements.
-    let skip (n: int64) (aseq: AsyncSeq<'a>) = 
+    let skip (n: int64) (upstream: AsyncSeq<'a>) = 
         { new AsyncSeq<'a> with
             member __.GetAsyncEnumerator (cancel) =
-                let inner = aseq.GetAsyncEnumerator(cancel)
+                let inner = upstream.GetAsyncEnumerator(cancel)
                 let mutable counter = n
                 { new IAsyncEnumerator<'a> with
                     member __.Current = inner.Current
@@ -500,10 +584,10 @@ module AsyncSeq =
                     } }}
         
     /// Modifies given async sequence into new one, which will only emit elements as long as predicate is satisfied. 
-    let takeWhile (f: 'a -> bool) (aseq: AsyncSeq<'a>) = 
+    let takeWhile (f: 'a -> bool) (upstream: AsyncSeq<'a>) = 
         { new AsyncSeq<'a> with
             member __.GetAsyncEnumerator (cancel) =
-                let inner = aseq.GetAsyncEnumerator(cancel)
+                let inner = upstream.GetAsyncEnumerator(cancel)
                 { new IAsyncEnumerator<'a> with
                     member __.Current = inner.Current
                     member __.DisposeAsync() = inner.DisposeAsync()
@@ -514,10 +598,10 @@ module AsyncSeq =
                     } }}
         
     /// Modifies given async sequence into new one, which will only emit up to a given number of elements. 
-    let take (n: int64) (aseq: AsyncSeq<'a>) = 
+    let take (n: int64) (upstream: AsyncSeq<'a>) = 
         { new AsyncSeq<'a> with
             member __.GetAsyncEnumerator (cancel) =
-                let inner = aseq.GetAsyncEnumerator(cancel)
+                let inner = upstream.GetAsyncEnumerator(cancel)
                 let mutable counter = n
                 { new IAsyncEnumerator<'a> with
                     member __.Current = inner.Current
@@ -531,10 +615,10 @@ module AsyncSeq =
         
     /// Similar to fold, but it's not a terminal operation.
     /// An updated state is produced continuously as an output element.
-    let scan (f: 's -> 'a -> ValueTask<'s>) (seed: 's) (aseq: AsyncSeq<'a>): AsyncSeq<'s> = 
+    let scan (f: 's -> 'a -> ValueTask<'s>) (seed: 's) (upstream: AsyncSeq<'a>): AsyncSeq<'s> = 
         { new AsyncSeq<'s> with
             member __.GetAsyncEnumerator (cancel) =
-                let inner = aseq.GetAsyncEnumerator(cancel)
+                let inner = upstream.GetAsyncEnumerator(cancel)
                 let mutable state = seed
                 { new IAsyncEnumerator<'s> with
                     member __.Current = state
@@ -552,10 +636,10 @@ module AsyncSeq =
                     } }}
     
     /// Shifts an element emission in time by delaying it by specified timeout.   
-    let delay (timeout: TimeSpan) (aseq: AsyncSeq<'a>): AsyncSeq<'a> =
+    let delay (timeout: TimeSpan) (upstream: AsyncSeq<'a>): AsyncSeq<'a> =
         { new AsyncSeq<'a> with
             member __.GetAsyncEnumerator (cancel) =
-                let inner = aseq.GetAsyncEnumerator(cancel)
+                let inner = upstream.GetAsyncEnumerator(cancel)
                 { new IAsyncEnumerator<'a> with
                     member __.Current = inner.Current
                     member __.DisposeAsync() = inner.DisposeAsync()
@@ -569,12 +653,12 @@ module AsyncSeq =
     /// Groups incoming elements into chunks of size `n`, and returns an async sequence of chunks.
     /// Once input sequence completes, it will produce a final chunk (potentially smaller than `n`)
     /// before completing itself. 
-    let grouped (n: int) (aseq: AsyncSeq<'a>): AsyncSeq<'a[]> =
+    let grouped (n: int) (upstream: AsyncSeq<'a>): AsyncSeq<'a[]> =
         if n <= 0 then raise (ArgumentException "AsyncSeq.buffered buffer size must be positive number")
         else
             { new AsyncSeq<'a[]> with
                 member __.GetAsyncEnumerator (cancel) =
-                    let inner = aseq.GetAsyncEnumerator(cancel)
+                    let inner = upstream.GetAsyncEnumerator(cancel)
                     let mutable buffer = Array.zeroCreate n
                     let mutable current = null
                     let mutable idx = 0 
@@ -610,7 +694,7 @@ module AsyncSeq =
     
     /// Zips two async sequences together producing an output as transformation of elements of corresponding elements.
     /// Whenever one of the async sequences completes, the result will also complete.
-    let zipWith (f: 'a * 'b -> 'c) (aseq: AsyncSeq<'a>) (bseq: AsyncSeq<'b>): AsyncSeq<'c> =
+    let zipWith (f: 'a * 'b -> 'c) (upstream: AsyncSeq<'a>) (bseq: AsyncSeq<'b>): AsyncSeq<'c> =
         let next (ae: IAsyncEnumerator<'a>) (be: IAsyncEnumerator<'b>) = vtask {
             let x = ae.MoveNextAsync()
             let y = be.MoveNextAsync()
@@ -628,7 +712,7 @@ module AsyncSeq =
         
         { new AsyncSeq<'c> with
             member __.GetAsyncEnumerator (cancel) =
-                let ae = aseq.GetAsyncEnumerator(cancel)
+                let ae = upstream.GetAsyncEnumerator(cancel)
                 let be = bseq.GetAsyncEnumerator(cancel)
                 let mutable current = Unchecked.defaultof<_>
                 { new IAsyncEnumerator<'c> with
@@ -716,6 +800,29 @@ module AsyncSeq =
                                 return true
                     } } }
         
+    /// Wraps given Task producing function with an async sequence, which will emit a result of a task and then complete.
+    /// A cancellation token passed from async enumerator can be used within task produced function to interrupt it.
+    let ofTaskCancellable (taskFn: CancellationToken -> Task<'a>): AsyncSeq<'a> = 
+        { new AsyncSeq<'a> with
+            member __.GetAsyncEnumerator (cancel) =
+                let mutable completed = false
+                let task = taskFn cancel
+                { new IAsyncEnumerator<'a> with
+                    member __.Current = task.Result
+                    member __.DisposeAsync() = task.Dispose(); ValueTask()
+                    member __.MoveNextAsync() = vtask {
+                        if completed then return false
+                        else
+                            if task.IsCompletedSuccessfully then
+                                completed <- true
+                                return true
+                            elif task.IsCanceled then return false
+                            else
+                                let! _ = task
+                                completed <- true
+                                return true
+                    } } }
+        
     /// Wraps given Async with an async sequence, which will emit a result of a task and then complete.
     let ofAsync (a: Async<'a>): AsyncSeq<'a> = 
         { new AsyncSeq<'a> with
@@ -754,12 +861,12 @@ module AsyncSeq =
     /// Returns an async sequence, that reads elements from a given channel reader.
     let inline ofChannel (ch: ChannelReader<'a>): AsyncSeq<'a> = ch.ReadAllAsync()
         
-    /// Attaches a disposal function to a current async sequence, which will be called once a corresponding async
-    /// enumerator will be disposed.  
-    let onDispose (f: unit -> ValueTask) (aseq: AsyncSeq<'a>): AsyncSeq<'a> =
+    /// Attaches a defered function to a current async sequence, which will be called once a corresponding async
+    /// enumerator will be completed.  
+    let defer (f: unit -> ValueTask) (upstream: AsyncSeq<'a>): AsyncSeq<'a> =
         { new AsyncSeq<'a> with
             member __.GetAsyncEnumerator (cancel) =
-                let inner = aseq.GetAsyncEnumerator(cancel)
+                let inner = upstream.GetAsyncEnumerator(cancel)
                 { new IAsyncEnumerator<'a> with
                     member __.Current = inner.Current
                     member __.DisposeAsync() = unitVtask {
@@ -777,12 +884,12 @@ module AsyncSeq =
 
     /// Returns an async sequence, that will limit the rate at which the input elements of given
     /// sequence are produces into the output.
-    let throttle (count: int) (timeout: TimeSpan) (aseq: AsyncSeq<'a>): AsyncSeq<'a> =
+    let throttle (count: int) (timeout: TimeSpan) (upstream: AsyncSeq<'a>): AsyncSeq<'a> =
         if count <= 0 then raise (ArgumentException "AsyncSeq.throttle count must be positive")
         else
             { new AsyncSeq<'a> with
                 member __.GetAsyncEnumerator (cancel) =
-                    let inner = aseq.GetAsyncEnumerator(cancel)
+                    let inner = upstream.GetAsyncEnumerator(cancel)
                     let mutable remaining = count
                     let mutable period = Unchecked.defaultof<Task>
                     { new IAsyncEnumerator<'a> with
@@ -808,10 +915,10 @@ module AsyncSeq =
     /// incoming, and in case when no element what produce before a given `timeout` has passed
     /// it will generate a new element using given `inject` function. That function will receive
     /// a last element that was produced prior the timeout.
-    let keepAlive (timeout: TimeSpan) (inject: 'a -> 'a) (aseq: AsyncSeq<'a>): AsyncSeq<'a> = 
+    let keepAlive (timeout: TimeSpan) (inject: 'a -> 'a) (upstream: AsyncSeq<'a>): AsyncSeq<'a> = 
         { new AsyncSeq<'a> with
             member __.GetAsyncEnumerator (cancel) =
-                let inner = aseq.GetAsyncEnumerator(cancel)
+                let inner = upstream.GetAsyncEnumerator(cancel)
                 let mutable pending = Unchecked.defaultof<Task<bool>>
                 let mutable current = Unchecked.defaultof<'a>
                 let handleAsync () = vtask {
@@ -846,10 +953,10 @@ module AsyncSeq =
     
     /// Deduplicates a consecutive input elements, skipping all elements,
     /// that were considered equal using given equality comparer function. 
-    let deduplicate (equal: 'a -> 'a -> bool) (aseq: AsyncSeq<'a>): AsyncSeq<'a> =
+    let deduplicate (equal: 'a -> 'a -> bool) (upstream: AsyncSeq<'a>): AsyncSeq<'a> =
         { new AsyncSeq<'a> with
             member __.GetAsyncEnumerator (cancel) =
-                let inner = aseq.GetAsyncEnumerator(cancel)
+                let inner = upstream.GetAsyncEnumerator(cancel)
                 let mutable last = None
                 { new IAsyncEnumerator<'a> with
                     member __.Current = inner.Current
@@ -869,7 +976,55 @@ module AsyncSeq =
                                 skipped' <- false
                         return hasNext'
                     } } }
-        
+      
+    type private InterleavingState =
+        | None = 0
+        | Transitive = 1
+        | Interleaved = 2
+      
+    /// Interleaves the elements produced by a given asynchronous sequence, by producing an interleaved
+    /// value in between elements, based on the previously produced element.
+    /// Example:
+    /// <code>
+    /// AsyncSeq.ofSeq ["a";"b";"c"]
+    /// |> AsyncSeq.interleave (fun p n -> p + "-" + n) // "a"; "a-b"; "b"; "b-c"; "c"
+    /// </code>
+    let interleave (fn: 'a -> 'a -> 'a) (upstream: AsyncSeq<'a>): AsyncSeq<'a> =
+        { new AsyncSeq<'a> with
+            member __.GetAsyncEnumerator (cancel) =
+                let inner = upstream.GetAsyncEnumerator(cancel)
+                let mutable state = InterleavingState.None
+                let mutable prev = Unchecked.defaultof<'a>
+                let mutable current = Unchecked.defaultof<'a>
+                let mutable next = Unchecked.defaultof<'a>
+                { new IAsyncEnumerator<'a> with
+                    member __.Current = current
+                    member __.DisposeAsync() = inner.DisposeAsync()
+                    member __.MoveNextAsync() = vtask {
+                        if cancel.IsCancellationRequested then return false
+                        else
+                            match state with
+                            | InterleavingState.Interleaved ->
+                                current <- next
+                                prev <- next
+                                state <- InterleavingState.Transitive
+                                return true
+                            | InterleavingState.Transitive ->
+                                let! hasNext = inner.MoveNextAsync()
+                                if hasNext then
+                                    next <- inner.Current
+                                    current <- fn prev next
+                                    state <- InterleavingState.Interleaved
+                                return hasNext
+                            | InterleavingState.None ->
+                                state <- InterleavingState.Transitive
+                                let! hasNext = inner.MoveNextAsync()
+                                if hasNext then
+                                    prev <- inner.Current
+                                    current <- inner.Current
+                                return hasNext
+                    } } }
+            
     [<Sealed>]
     type internal GroupByAgent<'a, 'b>(cap: int, key: 'b, cancel: CancellationToken) =
         let chan = Channel.CreateBounded<'a>(cap)
@@ -941,13 +1096,28 @@ module AsyncSeq =
     /// which return pair of produced key and newly produced output. To avoid pulling
     /// unbounded load, `maxActiveGroups` can be specified to limit the max number of
     /// active children sequences. Each group-sequence will also allow to pull up to a
-    /// `capacityPerGroup` elements.
-    let groupBy (maxActiveGroups: int) (capacityPerGroup: int) (fn: 'a -> 'b) (aseq: AsyncSeq<'a>): AsyncSeq<('b * AsyncSeq<'a>)> =
+    /// `capacityPerGroup` elements, before triggering backpressure in upstream.
+    let groupBy (maxActiveGroups: int) (capacityPerGroup: int) (fn: 'a -> 'b) (upstream: AsyncSeq<'a>): AsyncSeq<('b * AsyncSeq<'a>)> =
         { new AsyncSeq<_> with
             member __.GetAsyncEnumerator (cancel) =
-                let reader = GroupByReader<'a, 'b>(maxActiveGroups, capacityPerGroup, fn, cancel, aseq.GetAsyncEnumerator(cancel))
+                let reader = GroupByReader<'a, 'b>(maxActiveGroups, capacityPerGroup, fn, cancel, upstream.GetAsyncEnumerator(cancel))
                 let inner = reader.AsyncSeq().GetAsyncEnumerator(cancel)
                 { new IAsyncEnumerator<_> with
                     member __.Current = inner.Current
                     member __.DisposeAsync() = (reader :> IAsyncDisposable).DisposeAsync()
                     member __.MoveNextAsync() = inner.MoveNextAsync() } }
+    
+    /// Waits until all elements of the upstream sequence arrive, but discards them.
+    let ignore (upstream: AsyncSeq<'a>) = unitVtask {
+        let e = upstream.GetAsyncEnumerator()
+        try
+            let! cont = e.MoveNextAsync()
+            let mutable hasNext = cont
+            while hasNext do
+                let! cont = e.MoveNextAsync()
+                hasNext <- cont
+            do! e.DisposeAsync()
+        with ex ->
+            do! e.DisposeAsync()
+            rethrow ex
+    }

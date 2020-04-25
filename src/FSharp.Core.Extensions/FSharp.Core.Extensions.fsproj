@@ -8,12 +8,12 @@
     <Compile Include="Memory.fs" />
     <Compile Include="Atomic.fs" />
     <Compile Include="Task.fs" />
+    <Compile Include="Channels.fs" />
     <Compile Include="Array.fs" />
     <Compile Include="LazyTask.fs" />
-    <Compile Include="HybridTime.fs" />
+    <Compile Include="Hlc.fs" />
     <Compile Include="Enum.fs" />
     <Compile Include="Vec.fs" />
-    <Compile Include="Radix.fs" />
     <Compile Include="Art.fs" />
     <Compile Include="Random.fs" />
     <Content Include="paket.references" />

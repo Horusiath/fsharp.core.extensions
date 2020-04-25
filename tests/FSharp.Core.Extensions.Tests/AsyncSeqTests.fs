@@ -402,4 +402,16 @@ let tests =
             Expect.equal actual expected "groupBy should return correct groups"
             for (KeyValue(k, v)) in actual do
                 Expect.all v (fun i -> i % 100 = k) "groups should be created correctly"
+                
+        ftestCase "interleave should produce value between input elements" <| fun _ ->
+            let input = ["a";"b";"c";"d"]
+            let expected = ["a";"a-b";"b";"b-c";"c";"c-d";"d"]
+            let actual =
+                input
+                |> AsyncSeq.ofSeq
+                |> AsyncSeq.interleave (fun prev next -> prev + "-" + next)
+                |> AsyncSeq.collect
+                |> eval
+                |> List.ofSeq
+            Expect.equal actual expected "interleave should produce values between elements from upstream"
     ]

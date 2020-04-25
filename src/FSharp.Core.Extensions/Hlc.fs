@@ -17,6 +17,7 @@ limitations under the License.
 namespace FSharp.Core
 
 open System
+open System
 open System.Runtime.CompilerServices
 open System.Threading
 
@@ -29,49 +30,22 @@ open System.Threading
 /// for logical component, which is used to guarantee consistency through monotonic increment if necessary.
 /// 
 /// See: http://users.ece.utexas.edu/~garg/pdslab/david/hybrid-time-tech-report-01.pdf
-[<IsReadOnly;Struct>]
-type HybridTime =
-    { Ticks: int64 }
-    override this.ToString() = DateTime(this.Ticks, DateTimeKind.Utc).ToString("O")    
-
 [<RequireQualifiedAccess>]
-module HybridTime =
+module Hlc =
     
-    let [<Literal>] private mask = 0xffL
-    
-    let mutable private osTime = fun () -> DateTime.UtcNow.Ticks &&& ~~~mask
-
-    let mutable private latestTicks = atom (osTime())
-     
-    /// Converts current `DateTime` to a `HybridTime`
-    let inline ofDateTime (date: DateTime): HybridTime =
-        let ticks = date.ToUniversalTime().Ticks &&& ~~~mask
-        { Ticks = ticks }
-        
-    /// Converts current `HybridTime` to a `DateTime`.
-    let inline toDateTime (time: HybridTime): DateTime = DateTime(time.Ticks, DateTimeKind.Utc)
-         
+    let [<Literal>] private MASK = 0xffL    
+    let mutable private osTime = fun () -> DateTime.UtcNow.Ticks &&& ~~~MASK
+    let mutable private highest = atom (osTime())
     let private getTime = fun t -> Math.Max(osTime (), t+1L)
          
     /// Returns a hybrid time, which can be used to represent a UTC-compatible time.
-    let now (): HybridTime =
-        { Ticks = latestTicks |> Atomic.update getTime }
-        
-    /// Returns the ticks (close equivalent to DateTime.Ticks) stored inside `HybridTime`.
-    let inline ticks (time: HybridTime): int64 = time.Ticks
+    /// Unlike `DateTime.UtcNow` this value is guaranteed to be monotonic.
+    let now (): DateTime =
+        let ticks = highest |> Atomic.update (fun ts -> Math.Max(osTime(), ts) + 1L)
+        DateTime(ticks, DateTimeKind.Utc)
     
     /// Updates a current hybrid clock with the `time` incoming from remote replica.
-    let adjust (time: HybridTime): HybridTime =
-        let ticks = latestTicks |> Atomic.update (max time.Ticks)
-        { Ticks = ticks }
+    let sync (remoteDate: DateTime): DateTime =
+        let ticks = highest |> Atomic.update (fun ts -> Math.Max(ts, remoteDate.Ticks))
+        DateTime(ticks, DateTimeKind.Utc)
         
-    module Unsafe =
-        
-        /// Executes given `thunk` of code within the mocked environment, where a OS wall clock is replaced
-        /// with a given `clock` function (expected to return ticks of current time).
-        let mocked (clock: unit -> int64) (thunk: unit -> unit) =
-            let oldClock = Interlocked.Exchange(&osTime, clock)
-            try
-                thunk()
-            finally
-                Volatile.Write(&osTime, oldClock)

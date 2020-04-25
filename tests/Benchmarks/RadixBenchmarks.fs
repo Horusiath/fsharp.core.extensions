@@ -37,10 +37,6 @@ type RadixAddSmallBenchmark() =
     member __.FSharpMapAddSmall() =
         Map.ofArray smallTuples
         
-    [<Benchmark>]
-    member __.RadixAddSmall() =
-        Radix.ofSeq smallTuples
-        
 [<MemoryDiagnoser>]
 type RadixAddHugeBenchmark() =
     
@@ -62,9 +58,6 @@ type RadixAddHugeBenchmark() =
     member __.FSharpMapAddSmall() =
         Map.ofArray thesaurus
         
-    [<Benchmark>]
-    member __.RadixAddSmall() =
-        Radix.ofSeq thesaurus
         
 [<MemoryDiagnoser>]
 type RadixFindBenchmark() =
@@ -78,7 +71,6 @@ type RadixFindBenchmark() =
         let src = File.ReadAllText("words.txt").Split(',')
         sortedDict <- src |> Seq.map (fun w -> w => 1L) |> ImmutableSortedDictionary.CreateRange
         map <- src |> Seq.map (fun w -> (w, 1L)) |> Map.ofSeq
-        radix <- src |> Seq.map (fun w -> (w, 1L)) |> Radix.ofSeq
         
     [<GlobalCleanup>]
     member __.Cleanup() =
@@ -92,8 +84,6 @@ type RadixFindBenchmark() =
     [<Benchmark>]
     member __.MapFind() = Map.tryFind "career" map
     
-    [<Benchmark>]
-    member __.RadixFind() = Radix.find "career" radix
     
 [<MemoryDiagnoser>]
 type RadixPrefixBenchmark() =
@@ -107,7 +97,6 @@ type RadixPrefixBenchmark() =
         let src = File.ReadAllText("words.txt").Split(',')
         sortedDict <- src |> Seq.map (fun w -> w => 1L) |> ImmutableSortedDictionary.CreateRange
         map <- src |> Seq.map (fun w -> (w, 1L)) |> Map.ofSeq
-        radix <- src |> Seq.map (fun w -> (w, 1L)) |> Radix.ofSeq
         
     [<GlobalCleanup>]
     member __.Cleanup() =
@@ -128,6 +117,3 @@ type RadixPrefixBenchmark() =
         |> Seq.skipWhile (fun e -> not <| e.Key.StartsWith("care"))
         |> Seq.takeWhile (fun e -> e.Key.StartsWith("care"))
         |> Seq.toArray
-    
-    [<Benchmark>]
-    member __.RadixPrefix() = Radix.prefixed "care" radix |> Seq.toArray
