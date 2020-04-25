@@ -3,21 +3,23 @@
 This library contains a set of utilities to support building efficient, concurrent programs using functional paradigm in F#, like:
 
 - [x] `atom` - an equivalent of F# `ref` cells, which major difference is that all operations (reads and updates) are **thread-safe**, yet executed without expensive OS-level locks, relying fully on lock-free data structures instead.
+- [x] `AsyncSeq` module which enables dozens of operators over `IAsyncEnumerable<'a>` interface, including element transformation, adding time dimensions, stream joining and splitting.
 - [x] `Vec` - an immutable efficient array-like data structure, with fast random reads, element traversal and append to the tail operations. Operations like `Vec.add` and `Vec.item` are *O(log32(n))*, which for in-memory data structure goes close to *O(1)*. Usually a performance is better than that of F# list or System.Collection.Immutable data structures for supported operations. 
-- [x] `HybridTime` which is an implementation of [hybrid-logical time protocol](http://users.ece.utexas.edu/~garg/pdslab/david/hybrid-time-tech-report-01.pdf), that works as a middle-ground between wall-clock UTC time (with precision up to millisecond) and monotonicity guarantees (originally `DateTime.UtcNow` doesn't guarantee, that returned value will always be greater than the one previously obtained due to nature of NTP and phenomenas like leap seconds).
+- [x] `Hlc` which is an implementation of [hybrid-logical time protocol](http://users.ece.utexas.edu/~garg/pdslab/david/hybrid-time-tech-report-01.pdf), that works as a middle-ground between wall-clock UTC time (with precision up to millisecond) and monotonicity guarantees (originally `DateTime.UtcNow` doesn't guarantee, that returned value will always be greater than the one previously obtained due to nature of NTP and phenomenas like leap seconds).
 - [x] `Random` which provides a **thread-safe** module for generating random operations. It also contains few extra functions not supplied originally by `System.Random` class.
 - [x] `LazyTask` which is going to work like `lazy (factory)` data structure, but the factory method can return a `Task`. In order to make this data structure non-blocking, the `lazyTask.Value` call itself returns a task.
   - [ ] *TODO: make a `lazyTask { ... }` computation expression.*
 - [ ] *In progress: an implementation of [Persistent Adaptative Radix Tree](https://ankurdave.com/dl/part-tr.pdf).*
-- [ ] *TODO: Last-Recently Used cache implementation.*
 - [x] `Enum` module, which provides a `Seq`-like module functions (`map`, `filter` etc.), that are optimized to work directly on enumerators. The difference is that, Enum is aware of generic nature of enumerators, so it can inline and devirtualize certain calls.
 - [x] Bunch of utility functions:
+  - [x] Helper functions to work with `Task` and `Channel` (including multi-channel `select` operator).
   - [x] `Array` and `Array.Simd` which provide vectorized variants of some operations (like `Array.Simd.contains`) that can be much faster.
   - [x] Utility functions in form of `Span`, `ReadOnlySpan`, `Memory`, `ReadOnlyMemory` and `ReadOnlySequence` modules.
+  - [x] Extra functions to `Map` type.
   - [x] Other functions I missed from time to time:
     - `~%` operator as equivalent of `op_Implicit` cast.
     - `=>` which creates a KeyValuePair out of its parameters.
-    - `*` mutliply operator for `TimeSpan`.  
+    - `*` multiply operator for `TimeSpan`.  
 
 ## API
 
@@ -50,7 +52,7 @@ a := b := !a |> ignore // swap contents of `a` and `b`. Now !a = 2 and !b = 1
 
 // You can also increment/decrement atomic values, effectivelly turning it into thread-safe counter
 let a = atom 1
-Atomic.inc a // returns 2
+Atomic.incr a // returns 2
 
 // You can also perform a conditional updates a.k.a. Compare-And-Swap or Compare-Exchange.
 // NOTE: for reference types it uses a reference equality (pointer check) instead of structural equality

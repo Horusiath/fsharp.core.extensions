@@ -1013,7 +1013,7 @@ module AsyncSeq =
         
     /// Attaches a deferred function to a current async sequence, which will be called once a corresponding async
     /// enumerator will be completed.  
-    let onComplete (f: unit -> ValueTask) (upstream: AsyncSeq<'a>): AsyncSeq<'a> =
+    let onDispose (f: unit -> ValueTask) (upstream: AsyncSeq<'a>): AsyncSeq<'a> =
         { new AsyncSeq<'a> with
             member __.GetAsyncEnumerator (cancel) =
                 let inner = upstream.GetAsyncEnumerator(cancel)
@@ -1257,7 +1257,20 @@ module AsyncSeq =
                     member __.Current = inner.Current
                     member __.DisposeAsync() = (reader :> IAsyncDisposable).DisposeAsync()
                     member __.MoveNextAsync() = inner.MoveNextAsync() } }
-    
+        
+    /// Returns an asynchronous sequence of elements, that will immediately fail once consumer will try to pull
+    /// first element. 
+    let failed<'a> (e: #exn) : AsyncSeq<'a> =
+        { new AsyncSeq<_> with
+            member __.GetAsyncEnumerator (cancel) =
+                { new IAsyncEnumerator<_> with
+                    member __.Current = Unchecked.defaultof<_>
+                    member __.DisposeAsync() = ValueTask()
+                    member __.MoveNextAsync() = vtask {
+                        if cancel.IsCancellationRequested then return false
+                        else return raise e
+                    } } }
+
     /// Waits until all elements of the upstream sequence arrive, but discards them.
     let ignore (upstream: AsyncSeq<'a>) = unitVtask {
         let e = upstream.GetAsyncEnumerator()
