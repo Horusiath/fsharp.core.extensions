@@ -27,6 +27,7 @@ open FSharp.Core
 open FSharp.Core
 
 let private eval (x: ValueTask<'a>) = x.GetAwaiter().GetResult()
+let private ueval (x: ValueTask) = x.GetAwaiter().GetResult()
 
 [<Tests>]
 let tests =
@@ -403,7 +404,7 @@ let tests =
             for (KeyValue(k, v)) in actual do
                 Expect.all v (fun i -> i % 100 = k) "groups should be created correctly"
                 
-        ftestCase "interleave should produce value between input elements" <| fun _ ->
+        testCase "interleave should produce value between input elements" <| fun _ ->
             let input = ["a";"b";"c";"d"]
             let expected = ["a";"a-b";"b";"b-c";"c";"c-d";"d"]
             let actual =
@@ -414,4 +415,41 @@ let tests =
                 |> eval
                 |> List.ofSeq
             Expect.equal actual expected "interleave should produce values between elements from upstream"
+            
+        testCase "ignore should wait for all elements to complete" <| fun _ ->
+            let input = [|1..10|]
+            let expected = input |> Array.sum
+            let mutable sum = 0
+            input
+            |> AsyncSeq.ofSeq
+            |> AsyncSeq.map (fun i -> sum <- sum + i)
+            |> AsyncSeq.ignore
+            |> ueval
+            Expect.equal sum expected "ignore value task should complete after iterating over all elements"
+            
+        testCase "split should partition upstream after first matching case" <| fun _ ->
+            let writer, reader = Channel.unboundedMpsc ()
+            let input = [| 1; 3; 3; 5; 2; 4; 1; 7; 6 |]
+            for i in input do writer.WriteAsync(i) |> ueval
+            writer.Complete()
+            let expected = [| 1; 3; 3; 5; |], [| 2; 4; 1; 7; 6 |]
+            let left, right =
+                reader
+                |> AsyncSeq.ofChannel
+                |> AsyncSeq.split (fun x -> x % 2 = 0)
+            
+            let a = left |> AsyncSeq.collect |> eval
+            Expect.equal a (fst expected) "left part should collect up to first even number"
+            let b = right |> AsyncSeq.collect |> eval
+            Expect.equal b (snd expected) "right part should collect up after first even number (inclusive)"
+            
+        testCase "unfold should produce values until None is returned" <| fun _ ->
+            let expected = [| 1..5 |] |> Array.rev
+            let actual =
+                AsyncSeq.unfold (fun state -> vtask {
+                    return if state = 0 then ValueNone else ValueSome (state-1, state) 
+                }) 5
+                |> AsyncSeq.collect
+                |> eval
+            Expect.equal actual expected "unfold should produce 5 elements"
     ]

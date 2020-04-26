@@ -1260,7 +1260,7 @@ module AsyncSeq =
         
     /// Returns an asynchronous sequence of elements, that will immediately fail once consumer will try to pull
     /// first element. 
-    let failed<'a> (e: #exn) : AsyncSeq<'a> =
+    let failed<'a> (e: exn) : AsyncSeq<'a> =
         { new AsyncSeq<_> with
             member __.GetAsyncEnumerator (cancel) =
                 { new IAsyncEnumerator<_> with
