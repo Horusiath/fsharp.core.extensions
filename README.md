@@ -3,7 +3,6 @@
 This library contains a set of utilities to support building efficient, concurrent programs using functional paradigm in F#, like:
 
 - [x] `atom` - an equivalent of F# `ref` cells, which major difference is that all operations (reads and updates) are **thread-safe**, yet executed without expensive OS-level locks, relying fully on lock-free data structures instead.
-- [x] `AsyncSeq` module which enables dozens of operators over `IAsyncEnumerable<'a>` interface, including element transformation, adding time dimensions, stream joining and splitting.
 - [x] `Vec` - an immutable efficient array-like data structure, with fast random reads, element traversal and append to the tail operations. Operations like `Vec.add` and `Vec.item` are *O(log32(n))*, which for in-memory data structure goes close to *O(1)*. Usually a performance is better than that of F# list or System.Collection.Immutable data structures for supported operations. 
 - [x] `Hlc` which is an implementation of [hybrid-logical time protocol](http://users.ece.utexas.edu/~garg/pdslab/david/hybrid-time-tech-report-01.pdf), that works as a middle-ground between wall-clock UTC time (with precision up to millisecond) and monotonicity guarantees (originally `DateTime.UtcNow` doesn't guarantee, that returned value will always be greater than the one previously obtained due to nature of NTP and phenomenas like leap seconds).
 - [x] `Random` which provides a **thread-safe** module for generating random operations. It also contains few extra functions not supplied originally by `System.Random` class.
@@ -20,6 +19,7 @@ This library contains a set of utilities to support building efficient, concurre
     - `~%` operator as equivalent of `op_Implicit` cast.
     - `=>` which creates a KeyValuePair out of its parameters.
     - `*` multiply operator for `TimeSpan`.  
+- [x] `AsyncSeq` module which enables dozens of operators over `IAsyncEnumerable<'a>` interface, including element transformation, adding time dimensions, stream joining and splitting:
 
 ## API
 
@@ -244,3 +244,50 @@ Here, we are converting an array of 1000 elements into a final representation of
 |           VecOfArray | 11.720 us | 0.2322 us | 0.3020 us |  9.3536 |     - |     - |   19.1 KB |
 
 Note: since FSharpx implementation internally represents stored elements as `obj`, in case of value types there's an additional cost related to boxing.
+
+### AsyncSeq
+
+`AsyncSeq<'a>` alone is an alias over `IAsyncEnumerable<'a>` interface available in modern .NET.
+
+- `AsyncSeq.withCancellation: CancellationToken -> AsyncSeq<'a> -> AsyncSeq<'a>` which explicitly assigns a `CancellationToken` to async enumerators created from async sequence.
+- `timer: TimeSpan -> AsyncSeq<TimeSpan>` will produce async sequence that will asynchronously "tick" in given intervals, returning time passed from one MoveNextAsync call to another.
+- `into: ChannelWriter<'a> -> AsyncSeq<'a> -> ValueTask` will flush all contents of async sequence into given channel, returning value task that can be awaited to completion.
+- `tryHead: AsyncSeq<'a> -> ValueTask<'a option>` will try to (asynchronously) return first element of the async sequence, if it's not empty.
+- `tryLast: AsyncSeq<'a> -> ValueTask<'a option>` will try to (asynchronously) return last element of the async sequence, if it's not empty.
+- `collect: AsyncSeq<'a> -> ValueTask<'a[]>` will try to materialize all elements of an async sequence into an array, returning value task that will complete one async sequence has no more elements to pull.
+- `fold: ('s->'a->'s) -> 's -> AsyncSeq<'a> -> ValueTask<'s>` will execute given function over elements of async sequence, incrementally building accumulating value and returning it eventually once sequence is completed.
+- `reduce: ('a->'a->'a) -> AsyncSeq<'a> -> ValueTask<'a option>` works like fold, but instead of picking initial state it will use first async sequence element. If sequence was empty, a None value will be returned eventually.
+- `scan: ('s->'a->'a) -> 's -> AsyncSeq<'a> -> AsyncSeq<'s>` works like `fold`, but with every incremental step it will emit new (possibly altered) accumulated value as subsequent async sequence.
+- `iteri: (int64->'a->ValueTask) -> AsyncSeq<'a> -> ValueTask`, `iter: ('a->ValueTask) -> AsyncSeq<'a> -> ValueTask` and `ignore: AsyncSeq<'a> -> ValueTask` all let you iterate over elements of the async sequence returning value task that finishes once sequence has been emptied.
+- `mapParallel: (prallelism:int) -> ('a->ValueTask<'b>) -> AsyncSeq<'a> -> AsyncSeq<'b>` lets you (potentially asynchronously) map async sequence elements in parallel. Due to its parallel nature, produced result sequence may output mapped elements in different order than the input.
+- `mapi: (int64->'a->'b) -> AsyncSeq<'a> -> AsyncSeq<'b>`, `map: ('a->'b) -> AsyncSeq<'a> -> AsyncSeq<'b>`, `mapAsynci: (int64->'a->ValueTask<'b>) -> AsyncSeq<'a> -> AsyncSeq<'b>` and `mapAsync: ('a->ValueTask<'b>) -> AsyncSeq<'a> -> AsyncSeq<'b>` are all variants of applying mapping function over values (and potentially indexes) produced by upstream into new async sequence of mapped elements pushed downstream.
+- `filter: ('a->bool) -> AsyncSeq<'a> -> AsyncSeq<'b>` simply let's you pick (using given predicate function) which of whe upstream elements should be pushed downstream.
+- `choose: ('a->ValueTask<'b option>) -> AsyncSeq<'a> -> AsyncSeq<'b>` works like combination of `mapAsync` and `filter`: it allows you to both map and filter out (by making mapping function return None) elements from the upstream.
+- `recover: (exn->'ValueTask<'a option) -> AsyncSeq<'a> -> AsyncSeq<'a>` allows you to react on potential exceptions that may have happen while pulling upstream, producing new event out of exception or completing the async sequence (if error mapping function returned None).
+- `onError: (exn->AsyncSeq<'a>) -> AsyncSeq<'a> -> AsyncSeq<'a>` allows you to react on potential exceptions that may have happen while pulling upstream, by providing an new stream that will replace failing one. This function works recursively.
+- `merge: AsyncSeq<'a> seq -> AsyncSeq<'a>` let's you merge many async sequences into one. Sequences are pulled sequentially: one must be completed first before next one will start to be pulled. 
+- `mergeParallel: AsyncSeq<'a> seq -> AsyncSeq<'a>` works like `merge` but in parallel fashion: sequences are being pulled at the same time, without waiting for any one to completion.
+- `bind: ('a->AsyncSeq<'b>) -> AsyncSeq<'a> -> AsyncSeq<'b>` let's you create a new async sequence for each element pulled from upstream: sequences produced this way will be pulled until completion before a next element from upstream will be pulled.
+- `skip: int64 -> AsyncSeq<'a> -> AsyncSeq<'a>`, `skipWhile: ('a->bool) -> AsyncSeq<'a> -> AsyncSeq<'a>` and `skipWithin: TimeSpan -> AsyncSeq<'a> -> AsyncSeq<'a>` all let you skip elements pulled from the upstream, either given number of them, until a predicate function is satisfied or for a given time window.
+- `take: int64 -> AsyncSeq<'a> -> AsyncSeq<'a>`, `takeWhile: ('a->bool) -> AsyncSeq<'a> -> AsyncSeq<'a>` and `takeWithin: TimeSpan -> AsyncSeq<'a> -> AsyncSeq<'a>` all let you take elements pulled from the upstream, either given number of them, until a predicate function is satisfied or for a given time window. Once take requirement is met, async sequence will be completed.
+- `split: ('a->bool) -> AsyncSeq<'a> -> AsyncSeq<'a>*AsyncSeq<'a>` lets you split upstream async sequence in two. First will be pulled until given predicate function is satisfied. Once that happens it will be completed and second sequence (with element that caused split) will be pulled for all other elements coming from upstream. That means, the predicate is checked only once.
+- `delay: ('a->TimeSpan) -> AsyncSeq<'a> -> AsyncSeq<'a>` will delay all elements pulled from upstream by given time returned from function parameter. Function parameter can be used eg. for creating exponential backoff delays if necessary.
+- `throttle: int -> TimeSpan -> AsyncSeq<'a> -> AsyncSeq<'a>` will apply rate limiting to upstream async sequence, limiting number of elements returned downstream to not reach over given number in specified time span.
+- `keepAlive: TimeSpan -> ('a->'a) -> AsyncSeq<'a> -> AsyncSeq<'a>` will monitor rate in which elements from upstream are incoming. They will fall over specified time span, the last received element will be applied into generator function, that will produce a new element that will be generated instead to keep the rate of upstream in specified time bounds.
+- `grouped: int -> AsyncSeq<'a> -> AsyncSeq<'a[]>` groups incoming elements into buckets of given size and pull them downstream as one. Final bucket (send right before sequence completion) can be smaller than requested size.
+- `buffered: int -> AsyncSeq<'a> -> AsyncSeq<'a[]>` let's you to disassociate rate of elements pulled downstream from upstream, especially useful when downstream pulls elements at slower rate. Upstream will be continuously (and asynchronously) pulled for elements up until given buffer size is reached. If in the meantime downstream will pull this sequence, it will receive array with all elements pulled so far. 
+- `zipWith: ('a->'b->'c) -> AsyncSeq<'a> -> AsyncSeq<'b> -> AsyncSeq<'c>` and `zip: AsyncSeq<'a> -> AsyncSeq<'b> -> AsyncSeq<'a*'b>` will merge together two async sequences, combining their elements pairwise before sending them downstream.
+- `ofSeq: 'a seq -> AsyncSeq<'a>` creates async sequence out of the given sequence.
+- `unfold: ('s->ValueTask<('s * 'a) option>) -> 's -> AsyncSeq<'a>` creates an async sequence out of the given generator function. That function takes initial state and continuously applies it producing new state and element to be emitted as result of async sequence. If None was returned, async sequence will be completed.
+- `ofFunc: (int64->ValueTask<'a option>) -> AsyncSeq<'a>` creates an async sequence out of the given generator function. That function gets a counter value (incremented with each call) and produce element that will be emitted as sequence's output. If None was returned, the sequence will complete.  
+- `ofAsync: Async<'a> -> AsyncSeq<'a>`, `ofTask: Task<'a> -> AsyncSeq<'a>` and `ofTaskCancellable: (CancellationToken->Task<'a>) -> AsyncSeq<'a>` all allow to transition F# Async or TPL Tasks into async enumerators. Cancellable version receives cancellation token passed once GetAsyncEnumerator is called and will be invoked on every such call.
+- `empty: AsyncSeq<'a>` returns an async sequence that has no elements and will immediately finish once pulled.
+- `repeat: 'a -> AsyncSeq<'a>` will produce infinite sequence of given element.
+- `singleton: 'a -> AsyncSeq<'a>` wraps given value with async sequence, that will produce that value only once.
+- `failed: exn -> AsyncSeq<'a>` returns a malfunctioning async sequence, that will fail with given exception when its enumerator will try to be pulled.
+- `ofOption: 'a option -> AsyncSeq<'a>` wraps given option with async sequence, that will produce option's value or complete immediately if option was None.
+- `ofChannel: ChannelReader<'a> -> AsyncSeq<'a>` modifies given channel into async sequence, that will complete once writer part of the channel will be explicitly completed.
+- `onDispose: (unit->ValueTask) -> AsyncSeq<'a> -> AsyncSeq<'a>` attaches given function to upstream async sequence, that will be called together with that sequence's enumerator dispose call.
+- `deduplicate: ('a->'a->bool) -> AsyncSeq<'a> -> AsyncSeq<'a>` will skip over consecutive elements of the upstream async sequence, if they are considered equal according to a given equality function.
+- `interleave: ('a->'a->'a) -> AsyncSeq<'a> -> AsyncSeq<'a>` will produce an extra element (generated using specified function) in between two consecutive elements pulled from upstream.
+- `groupBy: int -> int -> ('a->'b) -> AsyncSeq<'a> -> AsyncSeq<('b * AsyncSeq<'a>)>` will group elements of upstream async sequence by the given parameter function, producting async sequence of key and subsequence of grouped elements. Because of their nature, pull-based sequences are not ideal to work safely with grouping operators. For this reason, only up to specified number of subsequences can be active at any time. Additionally all active sequences must be periodically pulled in order to let upstream be called for other concurrent sequences to avoid deadlocking (which is amortized by every group having an internal buffer of a given capacity).
