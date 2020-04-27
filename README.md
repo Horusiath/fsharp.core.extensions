@@ -245,6 +245,32 @@ Here, we are converting an array of 1000 elements into a final representation of
 
 Note: since FSharpx implementation internally represents stored elements as `obj`, in case of value types there's an additional cost related to boxing.
 
+### Channel
+
+Channel module allows you to operate over `System.Threading.Channel<T>` in more F#-idiomatic way.
+
+```fsharp
+// create a writer/reader pair for multi-producer/single-consumer bounded channel
+let writer, reader = Channel.boundedMpsc 10
+for item in [|1..9|]
+    do! writer.WriteAsync(1)
+
+// you can try to pull all items currently stored inside of the channel and write them into span
+let buffer = Array.zeroCreate 6
+let span = Span buffer
+let itemsRead = Channel.readTo span reader
+
+// select can be used to await on multiple channels output, returning first pulled value
+// (in case when multiple channels have values read, the order of channels in select is used)
+let otherWriter, otherReader = Channel.boundedMpsc 10
+do! otherWriter.WriteAsync("hello")
+let! value = Channel.select [|
+    otherReader,
+    // Channel.map can be used to modify `ChannelReader<'a>` into `ChannelReader<'b>`
+    reader |> Channel.map (fun item -> string item)
+|]
+```
+
 ### AsyncSeq
 
 `AsyncSeq<'a>` alone is an alias over `IAsyncEnumerable<'a>` interface available in modern .NET.
