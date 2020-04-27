@@ -19,6 +19,7 @@ limitations under the License.
 namespace FSharp.Core
 
 open System
+open System.Runtime.CompilerServices
 open System.Threading
 open FSharp.Control.Tasks.Builders
 open System.Threading.Channels
@@ -58,9 +59,21 @@ module Channel =
         (ch.Writer, ch.Reader)
         
     /// Returns decomposed writer/reader pair components of unbounded SPSC
-    /// (multi-producer/multi-consumer) channel.
+    /// (single-producer/single-consumer) channel.
     let inline unboundedSpsc<'a> () : (ChannelWriter<'a> * ChannelReader<'a>) =
         let ch = Channel.CreateUnbounded(UnboundedChannelOptions(SingleWriter=true, SingleReader=true))
+        (ch.Writer, ch.Reader)
+        
+    /// Returns decomposed writer/reader pair components of n-capacity bounded SPMC
+    /// (single-producer/multi-consumer) channel.
+    let inline boundedSpmc<'a> (n: int) : (ChannelWriter<'a> * ChannelReader<'a>) =
+        let ch = Channel.CreateBounded(BoundedChannelOptions(n, SingleWriter=true, SingleReader=false))
+        (ch.Writer, ch.Reader)
+        
+    /// Returns decomposed writer/reader pair components of unbounded SPMC
+    /// (multi-producer/multi-consumer) channel.
+    let inline unboundedSpmc<'a> () : (ChannelWriter<'a> * ChannelReader<'a>) =
+        let ch = Channel.CreateUnbounded(UnboundedChannelOptions(SingleWriter=true, SingleReader=false))
         (ch.Writer, ch.Reader)
         
     /// Tries to read as much elements as possible from a given reader to fill provided span
@@ -110,10 +123,14 @@ module Channel =
     /// Wraps one channel reader into another one, returning a value mapped from the source.    
     let map (f: 'a -> 'b) (reader: ChannelReader<'a>) : ChannelReader<'b> =
         { new ChannelReader<'b>() with
+            
+            [<MethodImpl(MethodImplOptions.AggressiveInlining)>]
             member _.TryRead(ref) =
                 let ok, value = reader.TryRead()
                 if not ok then false
                 else
                     ref <- f value
                     true
+                    
+            [<MethodImpl(MethodImplOptions.AggressiveInlining)>]
             member _.WaitToReadAsync(cancellationToken) = reader.WaitToReadAsync(cancellationToken) }

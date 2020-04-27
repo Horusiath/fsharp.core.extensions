@@ -88,7 +88,7 @@ let tests =
                 do! Task.Delay(100)
                 do! w2.WriteAsync(2)
             })
-            Task.WaitAny(t1, t2) |> ignore
+            Task.WaitAll(t1, t2) |> ignore
             let value = selectVt |> eval
             Expect.equal value 2 "second queue finished before first one"
    
