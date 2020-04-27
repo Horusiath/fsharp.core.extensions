@@ -73,7 +73,7 @@ let tests =
             let v3 = r3.ReadAsync() |> eval
             Expect.equal v3 21 "third (loosing) queue should be intact after select"
          
-        ftestCase "select should consume elements from the queue, that has received element first" <| fun _ ->
+        testCase "select should consume elements from the queue, that has received element first" <| fun _ ->
             let w1, r1 = testChannel [||]
             let w2, r2 = testChannel [||]
             let selectVt = Channel.select [| r1; r2 |] // it's pending here
@@ -91,5 +91,13 @@ let tests =
             Task.WaitAny(t1, t2) |> ignore
             let value = selectVt |> eval
             Expect.equal value 2 "second queue finished before first one"
-            
+   
+        testCase "map should modify elements coming from source channel" <| fun _ ->
+            let _, r1 = testChannel [| 1..3 |]
+            let wrap = r1 |> Channel.map string
+            let v1 = wrap.ReadAsync() |> eval
+            Expect.equal v1 "1" "Channel.map maps upstream elements"
+            let v2 = r1.ReadAsync() |> eval
+            Expect.equal v2 2 "original channel is left intact"
+
     ]

@@ -106,3 +106,14 @@ module Channel =
             
         if found then ValueTask<'a>(result)
         else awaitForValue readers
+    
+    /// Wraps one channel reader into another one, returning a value mapped from the source.    
+    let map (f: 'a -> 'b) (reader: ChannelReader<'a>) : ChannelReader<'b> =
+        { new ChannelReader<'b>() with
+            member _.TryRead(ref) =
+                let ok, value = reader.TryRead()
+                if not ok then false
+                else
+                    ref <- f value
+                    true
+            member _.WaitToReadAsync(cancellationToken) = reader.WaitToReadAsync(cancellationToken) }
