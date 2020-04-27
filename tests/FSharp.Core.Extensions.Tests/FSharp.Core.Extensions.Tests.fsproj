@@ -12,6 +12,7 @@
     <Compile Include="LazyTaskTests.fs" />
     <Compile Include="EnumTests.fs" />
     <Compile Include="AsyncSeqTests.fs" />
+    <Compile Include="ChannelTests.fs" />
     <Compile Include="Main.fs" />
     <Content Include="paket.references" />
   </ItemGroup>
