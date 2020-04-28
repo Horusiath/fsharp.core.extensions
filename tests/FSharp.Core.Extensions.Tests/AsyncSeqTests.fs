@@ -478,5 +478,23 @@ let tests =
             Expect.isTrue (eval <| enum.MoveNextAsync()) "3rd pull should not fail"
             Expect.equal enum.Current [| 5; 6 |] "should fetch remaining elements"
             Expect.isFalse (eval <| enum.MoveNextAsync()) "4rd pull should notice closed upstream"
+            enum.DisposeAsync() |> ueval
             
+        testCase "timer should not produce events before expected interval" <| fun _ ->
+            // Scenario: we configure timer to tick every 100ms but... downstream we wait for 500ms
+            // what we DON'T want to see, is a "cumulative" ticking (so after 500ms, we don't want to yield 4-5 ticks in a row)
+            let aseq = AsyncSeq.timer (TimeSpan.FromMilliseconds 100.)
+            let enum = aseq.GetAsyncEnumerator()
+            Expect.isTrue (eval <| enum.MoveNextAsync()) "1st pull"
+            Expect.isGreaterThanOrEqual enum.Current (TimeSpan.FromMilliseconds 100.) "1st pull is delayed by 100ms"
+            
+            Thread.Sleep 500
+
+            Expect.isTrue (eval <| enum.MoveNextAsync()) "2nd pull"
+            Expect.isGreaterThanOrEqual enum.Current (TimeSpan.FromMilliseconds 500.) "2nd pull is delayed by 500ms because of sleep in current thread"
+
+            Expect.isTrue (eval <| enum.MoveNextAsync()) "3rd pull"
+            Expect.isGreaterThanOrEqual enum.Current (TimeSpan.FromMilliseconds 100.) "3rd pull shouldn't be immediate even though 2nd was delayed"
+            
+            enum.DisposeAsync() |> ueval
     ]
