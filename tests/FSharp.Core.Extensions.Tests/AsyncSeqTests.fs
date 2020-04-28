@@ -452,4 +452,31 @@ let tests =
                 |> AsyncSeq.collect
                 |> eval
             Expect.equal actual expected "unfold should produce 5 elements"
+            
+        testCase "buffered should not wait for buffer to be full" <| fun _ ->
+            let writer, reader = Channel.unboundedMpsc()
+            let aseq =
+                reader
+                |> AsyncSeq.ofChannel
+                |> AsyncSeq.buffered 3
+            let enum = aseq.GetAsyncEnumerator()
+            
+            // pulling of empty upstream should not complete immediatelly, but rather wait for at least one element to appear
+            let vt = enum.MoveNextAsync()
+            Expect.isFalse vt.IsCompleted "buffered enumerator should wait for at least 1 item to arrive"
+            writer.WriteAsync(1) |> ueval
+            Expect.isTrue (eval vt) "1st (eager) pull should return true"
+            Expect.equal enum.Current [| 1 |] "element written upstream should appear downstream immediately"
+            
+            // now we push more than buffered operator capacity allowed to, we shouldn't overflow buffered size
+            for i in 2..6 do writer.WriteAsync(i) |> ueval
+            Expect.isTrue (eval <| enum.MoveNextAsync()) "2nd pull should not fail"
+            Expect.equal enum.Current [| 2; 3; 4 |] "pulled buffer should not overflow configured capacity"
+            
+            // now pull rest of the elements
+            writer.Complete()
+            Expect.isTrue (eval <| enum.MoveNextAsync()) "3rd pull should not fail"
+            Expect.equal enum.Current [| 5; 6 |] "should fetch remaining elements"
+            Expect.isFalse (eval <| enum.MoveNextAsync()) "4rd pull should notice closed upstream"
+            
     ]

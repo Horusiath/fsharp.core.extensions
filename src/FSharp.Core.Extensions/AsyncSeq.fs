@@ -839,9 +839,10 @@ module AsyncSeq =
                         while hasNext && not cancel.IsCancellationRequested do
                             let! next = inner.MoveNextAsync()
                             hasNext <- next
-                            if not (writer.TryWrite(inner.Current)) then
+                            if hasNext && not (writer.TryWrite(inner.Current)) then
                                 let! next = writer.WaitToWriteAsync(cancel)
-                                hasNext <- hasNext && next
+                                hasNext <- hasNext && next && writer.TryWrite(inner.Current)
+                        writer.Complete()
                     })
                     let mutable current = Unchecked.defaultof<_>
                     let buf = Array.zeroCreate maxBufferSize
@@ -855,7 +856,7 @@ module AsyncSeq =
                             if hasItems then
                                 let span = Span.ofArray buf
                                 let read = Channel.readTo span reader
-                                current <- span.Slice(0, read).ToArray()                                
+                                current <- span.Slice(0, read).ToArray()
                                 return true
                             else
                                 current <- Unchecked.defaultof<_>
