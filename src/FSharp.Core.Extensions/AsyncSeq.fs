@@ -92,7 +92,7 @@ module AsyncSeq =
         
     /// Returns a task, which will pull all incoming elements from a given sequence
     /// or until token has cancelled, and pushes them to a given channel writer.
-    let into (chan: ChannelWriter<'a>) (upstream: AsyncSeq<'a>) = vtask {
+    let into (closeChannelOnComplete: bool) (chan: ChannelWriter<'a>) (upstream: AsyncSeq<'a>) = vtask {
         let e = upstream.GetAsyncEnumerator()
         try
             let! hasNext = e.MoveNextAsync()
@@ -102,10 +102,13 @@ module AsyncSeq =
                 let! hasNext = e.MoveNextAsync()
                 hasNext' <- hasNext
             do! e.DisposeAsync()
-            do chan.Complete()
+            if closeChannelOnComplete then
+                do chan.Complete()
         with ex ->
             do! e.DisposeAsync()
-            return rethrow ex 
+            if closeChannelOnComplete then
+                chan.TryComplete(ex) |> ignore
+            return rethrow ex
     }
             
     /// Tries to return the first element of the async sequence,

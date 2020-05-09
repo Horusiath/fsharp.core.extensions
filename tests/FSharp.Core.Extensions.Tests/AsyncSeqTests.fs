@@ -497,4 +497,40 @@ let tests =
             Expect.isGreaterThanOrEqual enum.Current (TimeSpan.FromMilliseconds 100.) "3rd pull shouldn't be immediate even though 2nd was delayed"
             
             enum.DisposeAsync() |> ueval
+            
+        testCase "into should push items into channel" <| fun _ ->
+            let (writer, reader) = Channel.unboundedSpsc ()
+            AsyncSeq.ofSeq [1;2;3]
+            |> AsyncSeq.into true writer
+            |> eval
+            
+            let mutable item = Unchecked.defaultof<_>
+            Expect.isTrue (reader.TryRead(&item)) "reader should read 1st element"
+            Expect.equal item 1 "1st element is 1"
+            Expect.isTrue (reader.TryRead(&item)) "reader should read 2nd element"
+            Expect.equal item 2 "2nd element is 2"
+            Expect.isTrue (reader.TryRead(&item)) "reader should read 3rd element"
+            Expect.equal item 3 "3rd element is 3"
+            Expect.isFalse (reader.TryRead(&item)) "only 3 elements where pushed before completion"
+            
+            Expect.isTrue reader.Completion.IsCompletedSuccessfully "AsyncSeq.into(true) should close writer upon completion"
+            
+        testCase "into(false) should leave the channel open" <| fun _ ->
+            let (writer, reader) = Channel.unboundedSpsc ()
+            AsyncSeq.ofSeq [1]
+            |> AsyncSeq.into false writer
+            |> eval
+            
+            let mutable item = Unchecked.defaultof<_>
+            Expect.isTrue (reader.TryRead(&item)) "reader should read 1st element"
+            Expect.equal item 1 "1st element is 1"
+            Expect.isTrue (reader.TryRead(&item)) "only 1 element was pushed"
+            
+            Expect.isFalse reader.Completion.IsCompleted "AsyncSeq.into(false) should keep open channel upon completion"
+            
+            Expect.isTrue (writer.TryWrite(2)) "it should be possible to write to channel again"
+            Expect.isTrue (reader.TryRead(&item)) "reader should read 2nd element"
+            Expect.equal item 2 "2nd element is 2"
+            
+            writer.Complete()
     ]

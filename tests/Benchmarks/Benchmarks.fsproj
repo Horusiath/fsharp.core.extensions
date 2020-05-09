@@ -9,6 +9,7 @@
     <Compile Include="EnumBenchmarks.fs" />
     <Compile Include="AtomicBenchmarks.fs" />
     <Compile Include="RadixBenchmarks.fs" />
+    <Compile Include="ActorBenchmarks.fs" />
     <Compile Include="Program.fs" />
     <Content Include="paket.references" />
     <Content Include="words.txt">

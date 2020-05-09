@@ -20,6 +20,7 @@ namespace FSharp.Core
 
 open System
 open System.Runtime.CompilerServices
+open System.Runtime.ExceptionServices
 open System.Threading
 open FSharp.Control.Tasks.Builders
 open System.Threading.Channels
@@ -134,3 +135,109 @@ module Channel =
                     
             [<MethodImpl(MethodImplOptions.AggressiveInlining)>]
             member _.WaitToReadAsync(cancellationToken) = reader.WaitToReadAsync(cancellationToken) }
+        
+type ActorOptions =
+    { MailboxSize: int }
+    static member Default = { MailboxSize = -1 }
+        
+open FSharp.Control.Tasks.Builders.Unsafe
+        
+/// Actor, that will consume sent messages one by one in thread safe manner, always using single thread at the time.
+/// Actor takes initial state, that is accessible via `State` property and can be modified by returning updated state
+/// in message handler. Actor mailbox is unbounded by default, but its size can be configured by provided options.
+///
+/// Actor is compliant with `ChannelWriter` API, which make it composable in some scenarios
+/// (eg. as target of `AsyncSeq.into`).
+///
+/// Actor's state is no fully encapsulated, as it may be accessed at any time by using `State` property - therefore
+/// avoid using mutable state or modifying it outisde of actor message handler, as it may introduce data races.
+///
+/// Actor provides `Terminated` task that can be awaited to determine when actor has been stopped (if actor's message
+/// handler function raised uncaught exception or actor was `TryComplete`d with exception, this task will complete with
+/// failure). Actor can be stopped gently (letting it process all pending messages first) via
+/// `DisposeAsync(false)`/`Complete()` or immediately via `DisposeAsync(true)`/`DisposeAsync()`/`Dispose()`.
+///
+/// Actor provided `CancellationToken` that can be provided as parameter into methods that which should not outlive an
+/// actor's lifetime.
+[<Sealed>]
+type Actor<'msg, 'state>(init: 'state, handler: Actor<'msg,'state> -> 'msg -> ValueTask<'state>, ?options: ActorOptions) as this =
+    inherit ChannelWriter<'msg>()
+    let cts = new CancellationTokenSource()
+    let (writer, reader) =
+        let options = options |> Option.defaultValue ActorOptions.Default
+        if options.MailboxSize <= 0
+        then Channel.unboundedMpsc()
+        else Channel.boundedMpsc(options.MailboxSize)
+    let mutable state = init
+    static let next (ctx: Actor<'msg,'state>) : ValueTask<bool> = uvtask {
+        let mutable msg = Unchecked.defaultof<_>
+        if ctx.Reader.TryRead(&msg) then
+            let! state' = ctx.Handler ctx msg
+            ctx.State <- state'
+            return true
+        else
+            let! cont = ctx.Reader.WaitToReadAsync()
+            if cont && ctx.Reader.TryRead(&msg) then
+                let! state' = ctx.Handler ctx msg
+                ctx.State <- state'
+                return true
+            else return false }
+    let task = Task.Run (fun () -> uunitTask {
+        let mutable cont = true
+        let mutable error = Unchecked.defaultof<exn>
+        while cont && not cts.IsCancellationRequested do
+            try
+                let! ready = next this
+                cont <- ready
+            with e ->
+                error <- e
+                cont <- false
+        
+        cts.Cancel()
+        writer.TryComplete(error) |> ignore
+        if not (isNull error) then ExceptionDispatchInfo.Capture(error).Throw()
+    })
+    member inline private _.Reader : ChannelReader<'msg> = reader
+    member inline private _.Handler = handler
+    /// Returns current state of the agent. Keep in mind, that this state is not synchronized with agent work loop, so
+    /// the best is to keep it immutable, as any changes may introduce race conditions and violate state encapsulation. 
+    member this.State
+        with [<MethodImpl(MethodImplOptions.AggressiveInlining)>] get () = state
+        and [<MethodImpl(MethodImplOptions.AggressiveInlining)>]  private set (state') = state <- state'
+    /// Cancellation token, that will be triggered once actor is being disposed.
+    member this.CancellationToken = cts.Token
+    /// Task, which completes, once actor finishes its work. If actor terminated abruptly, this task will complete with failure. 
+    member this.Terminated : Task = upcast task
+    /// Equivalent of channel WriteAsync. Sends a message to be processed by current agent. May be blocking if agent
+    /// has bounded mailbox size and its capacity has been reached.
+    member this.Send(message: 'msg, ?cancel: CancellationToken) = writer.WriteAsync(message, cancel |> Option.defaultValue CancellationToken.None)
+    /// Disposes current actor. If `interrupt` flag was set, it will dispose immediately, discarding all pending
+    /// messages. Otherwise it will just close writer channel (so noone can send messages to it), but complete only
+    /// after all pending messages has been processed.
+    member this.DisposeAsync (interrupt: bool) : ValueTask = unitVtask {
+        writer.TryComplete() |> ignore
+        if interrupt then
+            cts.Cancel()
+            return ()
+        else do! task
+    }
+    override this.TryComplete(exn) = writer.TryComplete(exn)
+    override this.TryWrite(msg) = writer.TryWrite(msg)
+    override this.WaitToWriteAsync(cancel) = writer.WaitToWriteAsync(cancel)
+    interface IAsyncDisposable with member this.DisposeAsync() = this.DisposeAsync(true)
+    interface IDisposable with member this.Dispose() = this.DisposeAsync(true).GetAwaiter().GetResult()
+    
+type Actor<'a> = Actor<'a, unit>
+    
+[<RequireQualifiedAccess>]
+module Actor =
+    
+    let inline statefulWith (options: ActorOptions) (state: 's) (handler: Actor<'a,'s> -> 'a -> ValueTask<'s>) : Actor<'a,'s> =
+        new Actor<'a,'s>(state, handler, options)
+        
+    let inline stateful state handler = statefulWith ActorOptions.Default state handler
+    
+    let inline statelessWith (options: ActorOptions) (handler: Actor<'a> -> 'a -> ValueTask) : Actor<'a> =
+        new Actor<'a,unit>((), (fun msg actor -> vtask { do! handler msg actor }), options)
+        
+    let inline stateless (handler: Actor<'a> -> 'a -> ValueTask) : Actor<'a> = statelessWith ActorOptions.Default handler
