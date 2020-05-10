@@ -169,36 +169,37 @@ type Actor<'msg, 'state>(init: 'state, handler: Actor<'msg,'state> -> 'msg -> Va
         then Channel.unboundedMpsc()
         else Channel.boundedMpsc(options.MailboxSize)
     let mutable state = init
-    static let next (ctx: Actor<'msg,'state>) : ValueTask<bool> = uvtask {
-        let mutable msg = Unchecked.defaultof<_>
-        if ctx.Reader.TryRead(&msg) then
-            let! state' = ctx.Handler ctx msg
-            ctx.State <- state'
-            return true
-        else
-            let! cont = ctx.Reader.WaitToReadAsync()
-            if cont && ctx.Reader.TryRead(&msg) then
-                let! state' = ctx.Handler ctx msg
-                ctx.State <- state'
-                return true
-            else return false }
-    let task = Task.Run (fun () -> uunitTask {
+    static let eventLoop (this: Actor<'msg,'state>) = fun () -> uunitTask {
         let mutable cont = true
         let mutable error = Unchecked.defaultof<exn>
-        while cont && not cts.IsCancellationRequested do
+        while cont && not this.CancellationTokenSource.IsCancellationRequested do
             try
-                let! ready = next this
-                cont <- ready
+                let ok, msg = this.Reader.TryRead() 
+                if ok then
+                    let! state' = this.Handler this msg
+                    this.State <- state'
+                    cont <- true
+                else
+                    let! ready = this.Reader.WaitToReadAsync()
+                    let ok, msg = this.Reader.TryRead()
+                    if ready && ok then
+                        let! state' = this.Handler this msg
+                        this.State <- state'
+                        cont <- true
+                    else cont <- false
             with e ->
                 error <- e
                 cont <- false
         
-        cts.Cancel()
-        writer.TryComplete(error) |> ignore
-        if not (isNull error) then ExceptionDispatchInfo.Capture(error).Throw()
-    })
+        this.CancellationTokenSource.Cancel()
+        this.Writer.TryComplete(error) |> ignore
+        if not (isNull error) then ExceptionDispatchInfo.Capture(error).Throw()        
+    } 
+    let task = Task.Run (eventLoop this)
     member inline private _.Reader : ChannelReader<'msg> = reader
     member inline private _.Handler = handler
+    member inline private _.CancellationTokenSource : CancellationTokenSource = cts
+    member inline private _.Writer : ChannelWriter<'msg> = writer
     /// Returns current state of the agent. Keep in mind, that this state is not synchronized with agent work loop, so
     /// the best is to keep it immutable, as any changes may introduce race conditions and violate state encapsulation. 
     member this.State

@@ -1,7 +1,7 @@
 namespace Benchmarks
 
 open BenchmarkDotNet.Attributes
-open FSharp.Control.Tasks.Builders
+open FSharp.Control.Tasks.Builders.Unsafe
 open FSharp.Core
 
 [<MemoryDiagnoser>]
@@ -16,7 +16,7 @@ type ActorBenchmarks() =
     member _.Cleanup() = ()
     
     [<Benchmark(Baseline=true)>]
-    member _.FSharpAsyncActor() = task {
+    member _.FSharpAsyncActor() = uunitTask {
         let promise = Promise<unit>()
         use actor = MailboxProcessor.Start(fun ctx ->
             let rec loop count = async {
@@ -32,9 +32,9 @@ type ActorBenchmarks() =
         do! promise.Task }
         
     [<Benchmark>]
-    member _.FSharpActorUnbounded() = task {
+    member _.FSharpActorUnbounded() = uunitTask {
         let promise = Promise<unit>()
-        use actor = Actor.stateful 0 (fun ctx msg -> vtask {
+        use actor = Actor.stateful 0 (fun ctx msg -> uvtask {
             let count' = ctx.State + msg
             if count' = Ops then
                 promise.SetResult ()
@@ -45,9 +45,9 @@ type ActorBenchmarks() =
         do! promise.Task }
         
     [<Benchmark>]
-    member _.FSharpActorBounded() = task {
+    member _.FSharpActorBounded() = uunitTask {
         let promise = Promise<unit>()
-        use actor = Actor.statefulWith { MailboxSize = 1000 } 0 (fun ctx msg -> vtask {
+        use actor = Actor.statefulWith { MailboxSize = 1000 } 0 (fun ctx msg -> uvtask {
             let count' = ctx.State + msg
             if count' = Ops then
                 promise.SetResult ()
