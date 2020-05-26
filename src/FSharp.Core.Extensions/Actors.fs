@@ -86,18 +86,29 @@ type UnboundedActor<'msg>() =
     member private this.Continue (vt: ValueTask) = System.Action(fun () ->
         if vt.IsFaulted then this.Interrupt(vt.AsTask().Exception)
         else this.Execute())
+    [<MethodImpl(MethodImplOptions.AggressiveInlining)>]
+    member private this.Handle(msg: 'msg inref) =
+        let t = this.Receive msg
+        if not t.IsCompletedSuccessfully then
+            t.GetAwaiter().UnsafeOnCompleted(this.Continue t)
+            false
+        else true
+    member private this.FastPath(msg: 'msg inref) =
+        try
+            if this.Handle &msg then
+                let prev = Interlocked.CompareExchange(&this.status, ActorStatus.Idle, ActorStatus.Enqueued)
+                if prev = ActorStatus.WriteClosed && queue.IsEmpty then promise.TrySetResult () |> ignore
+        with e ->
+            this.Interrupt e
     member private this.Execute() =
         let mutable msg = Unchecked.defaultof<_>
         try
             let mutable cont = queue.TryDequeue(&msg)
             let mutable isSync = true
             while cont && isSync do
-                let t = this.Receive msg
-                isSync <- t.IsCompletedSuccessfully
-                if t.IsCompletedSuccessfully then
+                isSync <- this.Handle &msg
+                if isSync then
                     cont <- queue.TryDequeue(&msg)
-                else
-                    t.GetAwaiter().UnsafeOnCompleted(this.Continue t)
             if isSync then
                 let prev = Interlocked.CompareExchange(&this.status, ActorStatus.Idle, ActorStatus.Enqueued)
                 if prev = ActorStatus.WriteClosed then promise.TrySetResult () |> ignore
@@ -110,13 +121,16 @@ type UnboundedActor<'msg>() =
         else ValueTask<_>(true)
         
     override this.TryWrite(msg) =
-        let prev = Interlocked.CompareExchange(&this.status, ActorStatus.Enqueued, ActorStatus.Idle)
-        if prev = ActorStatus.WriteClosed then false
-        else
-            //TODO: if actor status is Idle and queue is empty, we could execute it directly without enqueue
-            queue.Enqueue(msg) 
-            if prev = ActorStatus.Idle then this.Execute()
+        match Interlocked.CompareExchange(&this.status, ActorStatus.Enqueued, ActorStatus.Idle) with
+        | ActorStatus.Idle ->
+            if queue.IsEmpty then
+                this.FastPath &msg
+            else
+                queue.Enqueue(msg)
+                this.Execute()
             true
+        | ActorStatus.WriteClosed -> false
+        | _ -> queue.Enqueue(msg); true
     override this.TryComplete(e) =
         let prev = Interlocked.Exchange(&this.status, ActorStatus.WriteClosed)
         if prev <> ActorStatus.WriteClosed then

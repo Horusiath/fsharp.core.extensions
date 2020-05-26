@@ -325,6 +325,7 @@ This is simple actor implementation based on TPL and System.Threading.Channels. 
 ```fsharp
 [<Sealed>
 type Counter(init) =
+    inherit UnboundedActor<int>()
     let mutable state = 0
     override this.Receive msg = uunitVTask {
         match msg with
@@ -354,10 +355,10 @@ do! actor.Terminated
 
 Current performance benchmarks as compared to F# MailboxProcessor - example of actor-based counter, processing 1 000 000 messages:
 
-|               Method |     Mean |   Error |  StdDev | Ratio |       Gen 0 |     Gen 1 |     Gen 2 |    Allocated |
-|--------------------- |---------:|--------:|--------:|------:|------------:|----------:|----------:|-------------:|
-|     FSharpAsyncActor | 288.9 ms | 2.24 ms | 2.09 ms |  1.00 | 154000.0000 | 2000.0000 | 2000.0000 | 477861.04 KB |
-| FSharpActorUnbounded | 135.5 ms | 0.94 ms | 0.88 ms |  0.47 |           - |         - |         - |      1.44 KB |
+|               Method |      Mean |    Error |   StdDev | Ratio |       Gen 0 |     Gen 1 |     Gen 2 |    Allocated |
+|--------------------- |----------:|---------:|---------:|------:|------------:|----------:|----------:|-------------:|
+|     FSharpAsyncActor | 274.47 ms | 5.287 ms | 5.192 ms |  1.00 | 154000.0000 | 2000.0000 | 2000.0000 | 477862.31 KB |
+| FSharpActorUnbounded |  97.09 ms | 0.505 ms | 0.472 ms |  0.35 |           - |         - |         - |      1.33 KB |
 
-*FSharpAsyncActor* if F# `MailboxProcessor` implementation.
-*FSharpActorUnbounded* is Actor implementation from this lib using default options.
+* FSharpAsyncActor* is F# `MailboxProcessor` implementation.
+* FSharpActorUnbounded* is Actor implementation from this lib using default options.
