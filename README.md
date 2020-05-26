@@ -323,20 +323,19 @@ let! value = Channel.select [|
 This is simple actor implementation based on TPL and System.Threading.Channels. These actors don't offer location transparency mechanisms. By default actor's mailbox is unbounded, but this may be configured.
 
 ```fsharp
-use actor = Actor.stateful 0 (fun ctx msg -> uvtask {
-    match msg with
-    | Add v -> return ctx.State + v
-    | Done ->
-        ctx.Complete() // don't use `do! ctx.DisposeAsync(false)` in this context, as it may deadlock the actor
-        return ctx.State
-})
+[<Sealed>
+type Counter(init) =
+    let mutable state = 0
+    override this.Receive msg = uunitVTask {
+        match msg with
+        | Add v -> state <- state + v
+        | Done -> ctx.Complete() // don't use `do! ctx.DisposeAsync(false)` in this context, as it may deadlock the actor
+    }
+
+use actor = new Counter(0)
 
 // send a message to an actor
 do! actor.Send (Add 1) // for unbouded actors you don't need to await as send will never block
-
-// you can read current state of an actor at anytime, but keep in mind that this is not a thread-safe operation
-// therefore it's encouraged to use immutable data structures in this context
-let currentState = actor.State
 
 // each actor contains CancellationToken that may be used to bound method execution to a lifecycle of an actor.
 let! file = File.ReadAllAsync("file.txt", actor.CancellationToken)
@@ -355,12 +354,10 @@ do! actor.Terminated
 
 Current performance benchmarks as compared to F# MailboxProcessor - example of actor-based counter, processing 1 000 000 messages:
 
-|               Method |     Mean |   Error |  StdDev | Ratio | RatioSD |       Gen 0 |     Gen 1 |     Gen 2 | Allocated |
-|--------------------- |---------:|--------:|--------:|------:|--------:|------------:|----------:|----------:|----------:|
-|     FSharpAsyncActor | 262.6 ms | 2.80 ms | 2.48 ms |  1.00 |    0.00 | 154000.0000 | 2000.0000 | 2000.0000 | 466.66 MB |
-| FSharpActorUnbounded | 474.9 ms | 1.98 ms | 1.54 ms |  1.81 |    0.02 |  28000.0000 | 1000.0000 | 1000.0000 |  87.94 MB |
-|   FSharpActorBounded | 782.8 ms | 7.86 ms | 7.36 ms |  2.98 |    0.05 |  50000.0000 |         - |         - | 150.85 MB |
+|               Method |     Mean |   Error |  StdDev | Ratio |       Gen 0 |     Gen 1 |     Gen 2 |    Allocated |
+|--------------------- |---------:|--------:|--------:|------:|------------:|----------:|----------:|-------------:|
+|     FSharpAsyncActor | 288.9 ms | 2.24 ms | 2.09 ms |  1.00 | 154000.0000 | 2000.0000 | 2000.0000 | 477861.04 KB |
+| FSharpActorUnbounded | 135.5 ms | 0.94 ms | 0.88 ms |  0.47 |           - |         - |         - |      1.44 KB |
 
 *FSharpAsyncActor* if F# `MailboxProcessor` implementation.
 *FSharpActorUnbounded* is Actor implementation from this lib using default options.
-*FSharpActorBounded* is Actor implementation from this lib, using mailbox size of 1000 with awaiting for messages as form of backpressure.
