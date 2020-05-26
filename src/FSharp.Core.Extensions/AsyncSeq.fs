@@ -103,7 +103,7 @@ module AsyncSeq =
                 hasNext' <- hasNext
             do! e.DisposeAsync()
             if closeChannelOnComplete then
-                do chan.Complete()
+                chan.Complete()
         with ex ->
             do! e.DisposeAsync()
             if closeChannelOnComplete then

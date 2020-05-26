@@ -9,6 +9,7 @@
     <Compile Include="Atomic.fs" />
     <Compile Include="Task.fs" />
     <Compile Include="Channels.fs" />
+    <Compile Include="Actors.fs" />
     <Compile Include="AsyncSeq.fs" />
     <Compile Include="Array.fs" />
     <Compile Include="LazyTask.fs" />

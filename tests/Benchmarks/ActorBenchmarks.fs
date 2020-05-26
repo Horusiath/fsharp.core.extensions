@@ -4,6 +4,16 @@ open BenchmarkDotNet.Attributes
 open FSharp.Control.Tasks.Builders.Unsafe
 open FSharp.Core
 
+[<Sealed>]
+type TestActor(ops) =
+    inherit UnboundedActor<int>()
+    let mutable state = 0
+    override this.Receive msg = uunitVtask {
+        state <- state + msg
+        if state = ops then
+            this.Complete ()
+    }
+
 [<MemoryDiagnoser>]
 type ActorBenchmarks() =
     
@@ -27,33 +37,27 @@ type ActorBenchmarks() =
                     return ()
                 else return! loop count' }
             loop 0)
-        for i in 0..Ops do
+        for i in 0..Ops-1 do
             actor.Post 1
         do! promise.Task }
         
     [<Benchmark>]
     member _.FSharpActorUnbounded() = uunitTask {
-        let promise = Promise<unit>()
-        use actor = Actor.stateful 0 (fun ctx msg -> uvtask {
-            let count' = ctx.State + msg
-            if count' = Ops then
-                promise.SetResult ()
-                ctx.Complete ()
-            return count' })
-        for i in 0..Ops do
-            actor.Send 1 |> ignore
-        do! promise.Task }
-        
-    [<Benchmark>]
-    member _.FSharpActorBounded() = uunitTask {
-        let promise = Promise<unit>()
-        use actor = Actor.statefulWith { MailboxSize = 1000 } 0 (fun ctx msg -> uvtask {
-            let count' = ctx.State + msg
-            if count' = Ops then
-                promise.SetResult ()
-                ctx.Complete ()
-            return count' })
-        for i in 0..Ops do
+        use actor = new TestActor(Ops)
+        for i in 1..Ops do
             do! actor.Send 1
-        do! promise.Task
-    }
+        do! actor.Terminated }
+        
+    //[<Benchmark>]
+    //member _.FSharpActorBounded() = uunitTask {
+    //    let promise = Promise<unit>()
+    //    use actor = Actor.statefulWith { MailboxSize = 1000 } 0 (fun ctx msg -> uvtask {
+    //        let count' = ctx.State + msg
+    //        if count' = Ops then
+    //            promise.SetResult ()
+    //            ctx.Complete ()
+    //        return count' })
+    //    for i in 0..Ops do
+    //        do! actor.Send 1
+    //    do! promise.Task
+    //}

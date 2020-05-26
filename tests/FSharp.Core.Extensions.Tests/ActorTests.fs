@@ -33,17 +33,18 @@ type Message =
 
 [<Tests>]
 let tests =
-    testList "Actor" [
+    ftestList "Actor" [
         
         testTask "should process incoming messages" {
             do! uunitTask {
-                use actor = Actor.stateful 0 (fun ctx msg -> uvtask {
-                    match msg with
-                    | Add v -> return ctx.State + v
-                    | Done ->
-                        ctx.Complete()
-                        return ctx.State
-                })
+                let mutable state = 0
+                use actor =
+                    { new UnboundedActor<_>() with
+                        override ctx.Receive msg = uunitVtask {
+                            match msg with
+                            | Add v -> state <- state + v
+                            | Done -> ctx.Complete()                        
+                        } }
                 do! actor.Send (Add 1)
                 do! actor.Send (Add 2)
                 do! actor.Send (Add 3)
@@ -51,22 +52,23 @@ let tests =
                 
                 do! actor.Terminated
                 
-                Expect.equal actor.State 6 "actor should process all messages"                
+                Expect.equal state 6 "actor should process all messages"                
             }
         }
         
         testTask "should cancel depending actions" {
             do! uunitTask {
                 let flag = atom false
-                use actor = Actor.stateful 0 (fun ctx msg -> uvtask {
-                    if ctx.State = 0 then
-                        ctx.CancellationToken.Register (System.Action(fun () -> (flag := true) |> ignore)) |> ignore
-                    match msg with
-                    | Add v -> return ctx.State + v
-                    | Done ->
-                        ctx.Complete()
-                        return ctx.State
-                })
+                let mutable state = 0
+                use actor =
+                    { new UnboundedActor<_>() with
+                        override ctx.Receive msg = uunitVtask {
+                            if state = 0 then
+                                ctx.CancellationToken.Register (System.Action(fun () -> (flag := true) |> ignore)) |> ignore
+                            match msg with
+                            | Add v -> state <- state + v
+                            | Done -> ctx.Complete()
+                        } }
                 
                 do! actor.Send Done
                 do! actor.Terminated
@@ -77,27 +79,31 @@ let tests =
         
         testTask "should work like channel writer" {
             do! uunitTask {
-                use actor = Actor.stateful 0 (fun ctx msg -> uvtask {
-                    match msg with
-                    | Add v -> return ctx.State + v
-                    | Done ->
-                        ctx.Complete()
-                        return ctx.State
-                })
+                let mutable state = 0
+                use actor = 
+                    { new UnboundedActor<_>() with
+                        override ctx.Receive msg = uunitVtask {
+                            match msg with
+                            | Add v -> state <- state + v
+                            | Done -> ctx.Complete()
+                        } }
                 
                 do! AsyncSeq.ofSeq [Add 1; Add 2; Add 3] |> AsyncSeq.into true actor
                 do! actor.Terminated
                 
-                Expect.equal actor.State 6 "actor should process all pending messages before complete"
+                Expect.equal state 6 "actor should process all pending messages before complete"
             }
         }
         
         testTask "DisposeAsync(false) should wait for pending message to complete first" {
             do! uunitTask {
-                use actor = Actor.stateful 0 (fun ctx delta -> uvtask {
-                    do! Task.Delay(100)
-                    return ctx.State + delta
-                })
+                let mutable state = 0
+                use actor =
+                    { new UnboundedActor<_>() with
+                        override ctx.Receive msg = uunitVtask {
+                            do! Task.Delay(100)
+                            state <- state + msg
+                        } }
                 
                 do! actor.Send 1
                 do! actor.Send 2
@@ -109,16 +115,19 @@ let tests =
                 do! actor.Terminated
                 
                 Expect.isTrue actor.CancellationToken.IsCancellationRequested "after dispose actor's cancellation token should be triggered"
-                Expect.equal actor.State 3 "actor should process all messages" 
+                Expect.equal state 3 "actor should process all messages" 
             }
         }
         
         testTask "DisposeAsync(true) should terminate actor immediately" {
             do! uunitTask {
-                use actor = Actor.stateful 0 (fun ctx delta -> uvtask {
-                    do! Task.Delay(100)
-                    return ctx.State + delta
-                })
+                let mutable state = 0
+                use actor = 
+                    { new UnboundedActor<_>() with
+                        override ctx.Receive msg = uunitVtask {
+                            do! Task.Delay(100)
+                            state <- state + msg
+                        } }
                 
                 do! actor.Send 1
                 do! actor.Send 2
@@ -130,7 +139,13 @@ let tests =
                 do! actor.Terminated
                 
                 Expect.isTrue actor.CancellationToken.IsCancellationRequested "after dispose actor's cancellation token should be triggered"
-                Expect.notEqual actor.State 3 "actor should finish before processing all messages" 
+                Expect.notEqual state 3 "actor should finish before processing all messages" 
+            }
+        }
+        
+        testTask "failure inside of actor is propagated to terminated task" {
+            do! uunitTask {
+                failwith "not implemented"
             }
         }
     ]
