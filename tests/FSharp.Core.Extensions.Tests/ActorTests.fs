@@ -145,7 +145,21 @@ let tests =
         
         testTask "failure inside of actor is propagated to terminated task" {
             do! uunitTask {
-                failwith "not implemented"
+                let mutable state = 0
+                let actor = 
+                    { new UnboundedActor<_>() with
+                        override ctx.Receive msg = uunitVtask {
+                            if msg = 2 then failwith "BOOM"
+                            else state <- msg
+                        } }
+                
+                do! actor.Send 1
+                do! actor.Send 2
+                
+                Expect.throwsT<Exception> (fun () -> actor.Terminated.GetAwaiter().GetResult()) "terminated should complete with failure"
+                
+                Expect.isTrue actor.CancellationToken.IsCancellationRequested "after terminated actor's cancellation token should be triggered"
+                Expect.equal state 1 "actor should process unfailable messages" 
             }
         }
     ]

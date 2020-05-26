@@ -47,6 +47,13 @@ type ActorBenchmarks() =
         for i in 1..Ops do
             do! actor.Send 1
         do! actor.Terminated }
+    
+    [<Benchmark>]
+    member _.FSharpActorUnboundedAsync() = uunitTask {
+        use actor = new TestActor(Ops)
+        for i in 1..Ops do
+            do! actor.SendAsync 1
+        do! actor.Terminated }
         
     //[<Benchmark>]
     //member _.FSharpActorBounded() = uunitTask {

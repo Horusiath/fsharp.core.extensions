@@ -330,7 +330,7 @@ type Counter(init) =
     override this.Receive msg = uunitVTask {
         match msg with
         | Add v -> state <- state + v
-        | Done -> ctx.Complete() // don't use `do! ctx.DisposeAsync(false)` in this context, as it may deadlock the actor
+        | Done -> this.Complete() // don't use `do! ctx.DisposeAsync(false)` in this context, as it may deadlock the actor
     }
 
 use actor = new Counter(0)
@@ -355,10 +355,13 @@ do! actor.Terminated
 
 Current performance benchmarks as compared to F# MailboxProcessor - example of actor-based counter, processing 1 000 000 messages:
 
-|               Method |      Mean |    Error |   StdDev | Ratio |       Gen 0 |     Gen 1 |     Gen 2 |    Allocated |
-|--------------------- |----------:|---------:|---------:|------:|------------:|----------:|----------:|-------------:|
-|     FSharpAsyncActor | 274.47 ms | 5.287 ms | 5.192 ms |  1.00 | 154000.0000 | 2000.0000 | 2000.0000 | 477862.31 KB |
-| FSharpActorUnbounded |  97.09 ms | 0.505 ms | 0.472 ms |  0.35 |           - |         - |         - |      1.33 KB |
+|                    Method |      Mean |    Error |   StdDev | Ratio | RatioSD |       Gen 0 |     Gen 1 |     Gen 2 |    Allocated |
+|-------------------------- |----------:|---------:|---------:|------:|--------:|------------:|----------:|----------:|-------------:|
+|          FSharpAsyncActor | 279.71 ms | 2.855 ms | 2.384 ms |  1.00 |    0.00 | 154000.0000 | 2000.0000 | 2000.0000 | 477856.16 KB |
+|      FSharpActorUnbounded |  96.70 ms | 0.359 ms | 0.336 ms |  0.35 |    0.00 |           - |         - |         - |       2.6 KB |
+| FSharpActorUnboundedAsync |  99.19 ms | 1.976 ms | 4.460 ms |  0.35 |    0.02 |           - |         - |         - |    371.57 KB |
 
-* FSharpAsyncActor* is F# `MailboxProcessor` implementation.
-* FSharpActorUnbounded* is Actor implementation from this lib using default options.
+
+* `FSharpAsyncActor` is F# `MailboxProcessor` implementation.
+* `FSharpActorUnbounded` is Actor implementation from this lib using default (possibly synchronous) message passing.
+* `FSharpActorUnboundedAsync` is Actor implementation from this lib using fully asynchronous message passing.
