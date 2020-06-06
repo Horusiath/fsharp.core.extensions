@@ -60,3 +60,5 @@ module Task =
     let inline run (f: unit -> Task<'a>) : Task<'a> = Task.Run<'a>(Func<_>(f))
     
     let inline runCancellable (c: CancellationToken) (f: unit -> Task<'a>) : Task<'a> = Task.Run<'a>(Func<_>(f), c)
+
+type Promise<'a> = TaskCompletionSource<'a>

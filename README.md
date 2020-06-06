@@ -277,7 +277,7 @@ let! value = Channel.select [|
 
 - `AsyncSeq.withCancellation: CancellationToken -> AsyncSeq<'a> -> AsyncSeq<'a>` which explicitly assigns a `CancellationToken` to async enumerators created from async sequence.
 - `timer: TimeSpan -> AsyncSeq<TimeSpan>` will produce async sequence that will asynchronously "tick" in given intervals, returning time passed from one MoveNextAsync call to another.
-- `into: ChannelWriter<'a> -> AsyncSeq<'a> -> ValueTask` will flush all contents of async sequence into given channel, returning value task that can be awaited to completion.
+- `into: bool -> ChannelWriter<'a> -> AsyncSeq<'a> -> ValueTask` will flush all contents of async sequence into given channel, returning value task that can be awaited to completion. Set flag to determine if channel should be closed once async sequence completes sending all element.
 - `tryHead: AsyncSeq<'a> -> ValueTask<'a option>` will try to (asynchronously) return first element of the async sequence, if it's not empty.
 - `tryLast: AsyncSeq<'a> -> ValueTask<'a option>` will try to (asynchronously) return last element of the async sequence, if it's not empty.
 - `collect: AsyncSeq<'a> -> ValueTask<'a[]>` will try to materialize all elements of an async sequence into an array, returning value task that will complete one async sequence has no more elements to pull.
@@ -317,3 +317,51 @@ let! value = Channel.select [|
 - `deduplicate: ('a->'a->bool) -> AsyncSeq<'a> -> AsyncSeq<'a>` will skip over consecutive elements of the upstream async sequence, if they are considered equal according to a given equality function. Unlike "distinct" operators, it doesn't produce globally unique values (as this would require buffering all values), it only deduplicates neighbor elements. 
 - `interleave: ('a->'a->'a) -> AsyncSeq<'a> -> AsyncSeq<'a>` will produce an extra element (generated using specified function) in between two consecutive elements pulled from upstream.
 - `groupBy: int -> int -> ('a->'b) -> AsyncSeq<'a> -> AsyncSeq<('b * AsyncSeq<'a>)>` will group elements of upstream async sequence by the given parameter function, producting async sequence of key and subsequence of grouped elements. Because of their nature, pull-based sequences are not ideal to work safely with grouping operators. For this reason, only up to specified number of subsequences can be active at any time. Additionally all active sequences must be periodically pulled in order to let upstream be called for other concurrent sequences to avoid deadlocking (which is amortized by every group having an internal buffer of a given capacity).
+
+### Actors
+
+This is simple actor implementation based on TPL and System.Threading.Channels. These actors don't offer location transparency mechanisms. By default actor's mailbox is unbounded, but this may be configured.
+
+```fsharp
+[<Sealed>
+type Counter(init) =
+    inherit UnboundedActor<int>()
+    let mutable state = 0
+    override this.Receive msg = uunitVTask {
+        match msg with
+        | Add v -> state <- state + v
+        | Done -> this.Complete() // don't use `do! ctx.DisposeAsync(false)` in this context, as it may deadlock the actor
+    }
+
+use actor = new Counter(0)
+
+// send a message to an actor
+do! actor.Send (Add 1) // for unbouded actors you don't need to await as send will never block
+
+// each actor contains CancellationToken that may be used to bound method execution to a lifecycle of an actor.
+let! file = File.ReadAllAsync("file.txt", actor.CancellationToken)
+
+// actor extends ChannelWriter class, so it can be used in this context
+AsyncSeq.ofSeq [1;2;3] |> AsyncSeq.into false actor
+
+// actor may be closed gracefully (letting it process all stashed messages first) or abrutly
+do! actor.DisposeAsync(true)  // abrupt close
+do! actor.DisposeAsync(false) // graceful close
+
+// you can also await for actor's termination - this task will complete once actor gets disposed, it may also
+// complete with failure as actor doesn't handle exceptions by itself (use try/with if that's necessary)
+do! actor.Terminated
+```
+
+Current performance benchmarks as compared to F# MailboxProcessor - example of actor-based counter, processing 1 000 000 messages:
+
+|                    Method |      Mean |    Error |   StdDev | Ratio | RatioSD |       Gen 0 |     Gen 1 |     Gen 2 |    Allocated |
+|-------------------------- |----------:|---------:|---------:|------:|--------:|------------:|----------:|----------:|-------------:|
+|          FSharpAsyncActor | 279.71 ms | 2.855 ms | 2.384 ms |  1.00 |    0.00 | 154000.0000 | 2000.0000 | 2000.0000 | 477856.16 KB |
+|      FSharpActorUnbounded |  96.70 ms | 0.359 ms | 0.336 ms |  0.35 |    0.00 |           - |         - |         - |       2.6 KB |
+| FSharpActorUnboundedAsync |  99.19 ms | 1.976 ms | 4.460 ms |  0.35 |    0.02 |           - |         - |         - |    371.57 KB |
+
+
+* `FSharpAsyncActor` is F# `MailboxProcessor` implementation.
+* `FSharpActorUnbounded` is Actor implementation from this lib using default (possibly synchronous) message passing.
+* `FSharpActorUnboundedAsync` is Actor implementation from this lib using fully asynchronous message passing.

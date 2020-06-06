@@ -20,7 +20,6 @@ namespace FSharp.Core
 
 open System
 open System.Runtime.CompilerServices
-open System.Threading
 open FSharp.Control.Tasks.Builders
 open System.Threading.Channels
 open System.Threading.Tasks
@@ -134,3 +133,4 @@ module Channel =
                     
             [<MethodImpl(MethodImplOptions.AggressiveInlining)>]
             member _.WaitToReadAsync(cancellationToken) = reader.WaitToReadAsync(cancellationToken) }
+     
