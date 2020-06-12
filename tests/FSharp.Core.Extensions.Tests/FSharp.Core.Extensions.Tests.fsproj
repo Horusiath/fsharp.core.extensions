@@ -13,6 +13,7 @@
     <Compile Include="EnumTests.fs" />
     <Compile Include="AsyncSeqTests.fs" />
     <Compile Include="ChannelTests.fs" />
+    <Compile Include="ScheduleTests.fs" />
     <Compile Include="ActorTests.fs" />
     <Compile Include="Main.fs" />
     <Content Include="paket.references" />

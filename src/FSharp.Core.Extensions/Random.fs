@@ -42,6 +42,8 @@ module Random =
     
     type internal R = ThreadSafeRandom
 
+    let current: Random = R.Current
+    
     /// Mutates provided `array` by filling it with random bytes
     let fill (array: byte[]) = R.Current.NextBytes(array)
     
@@ -58,6 +60,8 @@ module Random =
         let hi = R.Current.Next()
         let lo = R.Current.Next()
         ((int64 hi) <<< 32) ||| (int64 lo)
+        
+    let float () : float = R.Current.NextDouble()
         
     /// Returns a random 32bit integer in [min, max) range. This is a thread safe operation.
     let between (min: int) (max: int): int = R.Current.Next(min, max)
