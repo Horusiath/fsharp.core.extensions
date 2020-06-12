@@ -366,7 +366,7 @@ Current performance benchmarks as compared to F# MailboxProcessor - example of a
 * `FSharpActorUnbounded` is Actor implementation from this lib using default (possibly synchronous) message passing.
 * `FSharpActorUnboundedAsync` is Actor implementation from this lib using fully asynchronous message passing.
 
-### Schedulers 
+### Schedules 
 
 While `Task.Delay()` is great way to introduce delays of various kind, sometimes we may need to introduce more advanced delay mechanisms: exponential backoffs, jittered (randomized) delays etc.
 For these cases `Scheduler` module provides composable API, which can be used for multi-step time spacing mechanism:
