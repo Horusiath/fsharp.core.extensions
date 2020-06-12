@@ -27,6 +27,7 @@ open FSharp.Core.Atomic.Operators
 open FsCheck
 open Expecto
 open FSharp.Control.Tasks.Builders.Unsafe
+open MBrace.FsPickler
 
 let private eval (x: ValueTask<'a>) = x.GetAwaiter().GetResult()
 
@@ -200,4 +201,19 @@ let tests =
             Expect.equal result None "retry should never return value if action never succeed"
             let msgs = errors |> List.map (fun e -> e.Message)
             Expect.equal msgs ["A";"A";"A";"A"] "retry should return all errors"
+            
+        testCase "is serializable" <| fun _ ->
+            let a = Schedule.exponential 2.0 (TimeSpan.FromMilliseconds 100.) |> Schedule.times 3
+            let b = Schedule.after (TimeSpan.FromMilliseconds 150.) |> Schedule.times 2
+            let policy = a |> Schedule.andThen b 
+            
+            let serializer = FsPickler.CreateBinarySerializer()
+            let payload = serializer.Pickle policy // size: 104B
+            let deserialized : Schedule = serializer.UnPickle payload
+            let actual =
+                deserialized.GetEnumerator()
+                |> Enum.fold (fun acc ts -> ts.TotalMilliseconds::acc) []
+                |> List.rev
+            
+            Expect.equal actual [100.;200.;400.;150.;150.] "Schedule should be able to serialize and deserialize payload"
     ]
