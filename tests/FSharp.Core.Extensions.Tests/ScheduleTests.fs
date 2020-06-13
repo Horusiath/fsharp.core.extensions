@@ -35,114 +35,99 @@ let private eval (x: ValueTask<'a>) = x.GetAwaiter().GetResult()
 let tests =
     ftestList "Schedule" [
         testCase "now should execute immediately" <| fun _ ->
-            let s = Schedule.now
+            let mutable s = Schedule.now
             // run this in loop to ensure that the behavior doesn't change over multiple calls
-            let e = s.GetEnumerator()
             for i=0 to 10 do
-                Expect.isTrue (e.MoveNext()) "Schedule.now should succeed"
-                Expect.equal e.Current TimeSpan.Zero "Schedule.now delay should be instantaneous"
+                Expect.equal s.Delay (ValueSome TimeSpan.Zero) "Schedule.now delay should be instantaneous"
+                s <- s.Advance()
                 
         testCase "never should return infinite timespan" <| fun _ ->
-            let s = Schedule.never
+            let mutable s = Schedule.never
             // run this in loop to ensure that the behavior doesn't change over multiple calls
-            let e = s.GetEnumerator()
             for i=0 to 10 do
-                Expect.isTrue (e.MoveNext()) "Schedule.never should succeed"
-                Expect.equal e.Current Timeout.InfiniteTimeSpan "Schedule.never delay should be infinite"
+                Expect.equal s.Delay (ValueSome Timeout.InfiniteTimeSpan) "Schedule.never delay should be infinite"
+                s <- s.Advance()
                 
         testCase "after should continuously return the same value" <| fun _ ->
             let delay = TimeSpan.FromSeconds 1.
-            let s = Schedule.after delay
+            let mutable s = Schedule.after delay
             // run this in loop to ensure that the behavior doesn't change over multiple calls
-            let e = s.GetEnumerator()
             for i=0 to 10 do
-                Expect.isTrue (e.MoveNext()) "Schedule.after should succeed"
-                Expect.equal e.Current delay "Schedule.after delay should be constant"
+                Expect.equal s.Delay (ValueSome delay) "Schedule.after delay should be constant"
+                s <- s.Advance()
                 
         testCase "completed should complete immediately" <| fun _ ->
             let s = Schedule.completed
-            let e = s.GetEnumerator()
-            Expect.isFalse (e.MoveNext()) "Schedule.completed should complete immediately"
+            Expect.isTrue (s.Delay.IsNone) "Schedule.completed should complete immediately"
               
         testCase "once should only execute once" <| fun _ ->
             let expected = TimeSpan.FromSeconds 1.
-            let s = Schedule.after expected |> Schedule.once
-            let e = s.GetEnumerator()
+            let s = Schedule.once expected 
             
-            Expect.isTrue (e.MoveNext()) "Schedule.once should succeed 1st time"
-            Expect.equal e.Current expected "Schedule.once delay should be using underlying scheduler"
-
-            Expect.isFalse (e.MoveNext()) "Schedule.once should complete 2nd time"
+            Expect.equal s.Delay (ValueSome expected) "Schedule.once delay should be using underlying scheduler"
+            Expect.isTrue (s.Advance().Delay.IsNone) "Schedule.once should complete 2nd time"
             
         testCase "times should execute specified number of times" <| fun _ ->
             let expected = TimeSpan.FromSeconds 1.
             let count = 3
-            let s = Schedule.after expected |> Schedule.times count
+            let mutable s = Schedule.after expected |> Schedule.times count
             // run this in loop to ensure that the behavior doesn't change over multiple calls
-            let e = s.GetEnumerator()
             for i=1 to count do
-                Expect.isTrue (e.MoveNext()) <| sprintf "Schedule.time should succeed (%i time)" i
-                Expect.equal e.Current expected <| sprintf "Schedule.time should use underlying scheduler delay (%i time)" i
+                Expect.equal s.Delay (ValueSome expected) <| sprintf "Schedule.time should use underlying scheduler delay (%i time)" i
+                s <- s.Advance()
              
-            Expect.isFalse (e.MoveNext()) <| sprintf "Schedule.time should complete after %i executions" count
+            Expect.isTrue (s.Advance().Delay.IsNone) <| sprintf "Schedule.time should complete after %i executions" count
             
         testCase "max completes once either of its components complete" <| fun _ ->
             let a = Schedule.after (TimeSpan.FromSeconds 10.) |> Schedule.times 2
             let b = Schedule.after (TimeSpan.FromSeconds 5.) |> Schedule.times 5
-            let s = Schedule.max a b
-            let e = s.GetEnumerator()
+            let mutable s = Schedule.max a b
             
-            Expect.isTrue (e.MoveNext()) "Schedule.max should succeed 1st time"
-            Expect.equal e.Current (TimeSpan.FromSeconds 10.) "Schedule.max should pick higher value"
-            
-            Expect.isTrue (e.MoveNext()) "Schedule.max should succeed 2nd time"
-            Expect.equal e.Current (TimeSpan.FromSeconds 10.) "Schedule.max should pick higher value"
-            
-            Expect.isFalse (e.MoveNext()) "Schedule.max should complete 3rd time"
+            Expect.equal s.Delay (ValueSome (TimeSpan.FromSeconds 10.)) "Schedule.max should pick higher value"            
+            s <- s.Advance()
+            Expect.equal s.Delay (ValueSome (TimeSpan.FromSeconds 10.)) "Schedule.max should pick higher value"            
+            Expect.isTrue (s.Advance().Delay.IsNone) "Schedule.max should complete 3rd time"
             
         testCase "min completes once both of its components complete" <| fun _ ->
             let a = Schedule.after (TimeSpan.FromSeconds 10.) |> Schedule.times 5
             let b = Schedule.after (TimeSpan.FromSeconds 5.) |> Schedule.times 2
-            let s = Schedule.min a b
-            let e = s.GetEnumerator()
+            let mutable s = Schedule.min a b
             
             for i=1 to 2 do
-                Expect.isTrue (e.MoveNext()) <| sprintf "Schedule.min should succeed (%i time)" i
-                Expect.equal e.Current (TimeSpan.FromSeconds 5.) <| sprintf "Schedule.min should use underlying scheduler delay (%i time)" i
+                Expect.equal s.Delay (ValueSome (TimeSpan.FromSeconds 5.)) <| sprintf "Schedule.min should use underlying scheduler delay (%i time)" i
+                s <- s.Advance()
                 
             for i=3 to 5 do
-                Expect.isTrue (e.MoveNext()) <| sprintf "Schedule.min should succeed (%i time)" i
-                Expect.equal e.Current (TimeSpan.FromSeconds 10.) <| sprintf "Schedule.min should use underlying scheduler delay (%i time)" i
+                Expect.equal s.Delay (ValueSome (TimeSpan.FromSeconds 10.)) <| sprintf "Schedule.min should use underlying scheduler delay (%i time)" i
+                s <- s.Advance()
 
-            Expect.isFalse (e.MoveNext()) "Schedule.max should complete 3rd time"
+            Expect.isTrue (s.Advance().Delay.IsNone) "Schedule.max should complete after 5th time"
             
         testCase "andThen uses 1st scheduler then 2nd one" <| fun _ ->
             let a = Schedule.after (TimeSpan.FromSeconds 10.) |> Schedule.times 5
             let b = Schedule.after (TimeSpan.FromSeconds 5.) |> Schedule.times 2
-            let s = a |> Schedule.andThen b
-            let e = s.GetEnumerator()
+            let mutable s = a |> Schedule.andThen b
             
             for i=1 to 5 do
-                Expect.isTrue (e.MoveNext()) <| sprintf "Schedule.andThen should succeed (%i time) for first scheduler" i
-                Expect.equal e.Current (TimeSpan.FromSeconds 10.) <| sprintf "Schedule.andThen should use first scheduler delay (%i time)" i
+                Expect.equal s.Delay (ValueSome (TimeSpan.FromSeconds 10.)) <| sprintf "Schedule.andThen should use first scheduler delay (%i time)" i
+                s <- s.Advance()
                 
             for i=6 to 7 do
-                Expect.isTrue (e.MoveNext()) <| sprintf "Schedule.andThen should succeed (%i time) for second scheduler" i
-                Expect.equal e.Current (TimeSpan.FromSeconds 5.) <| sprintf "Schedule.andThen should use second scheduler delay (%i time)" i
+                Expect.equal s.Delay (ValueSome (TimeSpan.FromSeconds 5.)) <| sprintf "Schedule.andThen should use second scheduler delay (%i time)" i
+                s <- s.Advance()
 
-            Expect.isFalse (e.MoveNext()) "Schedule.andThen should complete 3rd time"
+            Expect.isTrue (s.Advance().Delay.IsNone) "Schedule.andThen should complete after 7th time"
             
         testCase "jittered should operate within provided bounds" <| fun _ ->
             let min, max = TimeSpan.FromSeconds 5., TimeSpan.FromSeconds 20.
-            let s =
+            let mutable s =
                 Schedule.after (TimeSpan.FromSeconds 10.)
                 |> Schedule.jittered 0.5 2.0
-            let e = s.GetEnumerator()
                 
             for i=1 to 10 do
-                Expect.isTrue (e.MoveNext()) <| sprintf "Schedule.jittered should succeed (%i time)" i
-                Expect.isGreaterThan e.Current min <| sprintf "Schedule.jittered keep up with the lower bound (%i time)" i
-                Expect.isLessThan e.Current max <| sprintf "Schedule.jittered keep up with the upper bound (%i time)" i
+                Expect.isGreaterThan s.Delay (ValueSome min) <| sprintf "Schedule.jittered keep up with the lower bound (%i time)" i
+                Expect.isLessThan s.Delay (ValueSome max) <| sprintf "Schedule.jittered keep up with the upper bound (%i time)" i
+                s <- s.Advance()
                 
         testCase "spaced should return result immediately for empty schedule" <| fun _ ->
             let value = Schedule.spaced (fun () -> ValueTask<_>(1)) CancellationToken.None Schedule.completed
@@ -211,9 +196,10 @@ let tests =
             let payload = serializer.Pickle policy // size: 104B
             let deserialized : Schedule = serializer.UnPickle payload
             let actual =
-                deserialized.GetEnumerator()
-                |> Enum.fold (fun acc ts -> ts.TotalMilliseconds::acc) []
-                |> List.rev
+                deserialized
+                |> Schedule.toSeq
+                |> Seq.map (fun t -> t.TotalMilliseconds)
+                |> Seq.toList
             
             Expect.equal actual [100.;200.;400.;150.;150.] "Schedule should be able to serialize and deserialize payload"
     ]

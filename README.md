@@ -403,4 +403,5 @@ let! results =
 // Time passed: 300ms
 ```
 
-Schedulers provide simple composable API and can be serialized/deserialized by any serializer able to handle discriminated unions (keep in mind that `Schedule.ofSeq` will most likely eagerly evaluate provided sequence in order to serialize it). 
+Schedules provide simple composable API and can be serialized/deserialized by any serializer able to handle discriminated unions (keep in mind that `Schedule.ofSeq` will most likely eagerly evaluate provided sequence in order to serialize it).
+Schedules are immutable (advancing a schedule simply produces another, updated schedule), so that they can be safely shared between threads and persisted if necessary. Schedules can be converted into ordinary sequences using `Schedule.toSeq` function. 

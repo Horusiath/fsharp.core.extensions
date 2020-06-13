@@ -160,62 +160,86 @@ type private ScheduleJitteredEnumerator(inner: IEnumerator<TimeSpan>, min: doubl
 
 //TODO: this really conforms to standard iterator/enumerator patter - should we even create a separate interface just for that?
 type Schedule =
-    | Now
     | Done
+    | Now
     | Never
+    | Once of delay:TimeSpan
     | After of delay:TimeSpan
     | Exp of init:TimeSpan * factor:double
-    | OfSeq of delays:TimeSpan seq
-    | Once of Schedule
+    | OfArray of delays:TimeSpan[] * current:int
     | Times of Schedule * times:int
     | Max of Schedule * Schedule
     | Min of Schedule * Schedule
     | AndThen of Schedule * Schedule
-    | Jit of Schedule * min:double * max:double
-    with member this.GetEnumerator() : IEnumerator<TimeSpan> =
+    | Jit of delay:TimeSpan * Schedule * min:double * max:double
+    with
+        member this.Delay : TimeSpan voption =
             match this with
-            | Now ->
-                { new IEnumerator<TimeSpan> with
-                    member _.Current with get () : TimeSpan = Unchecked.defaultof<_>
-                    member _.Current with get () : obj = box (Unchecked.defaultof<TimeSpan>)
-                    member _.MoveNext() = true
-                    member _.Reset() = ()
-                    member _.Dispose() = () }
-            | Done -> 
-                { new IEnumerator<TimeSpan> with
-                    member _.Current with get () : TimeSpan = Unchecked.defaultof<_>
-                    member _.Current with get () : obj = box (Unchecked.defaultof<TimeSpan>)
-                    member _.MoveNext() = false
-                    member _.Reset() = ()
-                    member _.Dispose() = () }
-            | Never ->
-                { new IEnumerator<TimeSpan> with
-                    member _.Current with get () : TimeSpan = Timeout.InfiniteTimeSpan
-                    member _.Current with get () : obj = box (Timeout.InfiniteTimeSpan)
-                    member _.MoveNext() = true
-                    member _.Reset() = ()
-                    member _.Dispose() = () }
-            | After(d) ->
-                { new IEnumerator<TimeSpan> with
-                    member _.Current with get () : TimeSpan = d
-                    member _.Current with get () : obj = box (d)
-                    member _.MoveNext() = true
-                    member _.Reset() = ()
-                    member _.Dispose() = () }
-            | OfSeq(delays) -> delays.GetEnumerator()
-            | Exp(init, factor) -> upcast new ScheduleExponentialEnumerator(init, factor)
-            | Once(schedule) -> upcast new ScheduleOnceEnumerator(schedule.GetEnumerator())        
-            | Times(schedule, times) -> upcast new ScheduleTimesEnumerator(schedule.GetEnumerator(), times)  
-            | Max(left, right) -> upcast new ScheduleMaxEnumerator(left.GetEnumerator(), right.GetEnumerator())
-            | Min(left, right) -> upcast new ScheduleMinEnumerator(left.GetEnumerator(), right.GetEnumerator())
-            | AndThen(first, second) -> upcast new ScheduleAndThenEnumerator(first.GetEnumerator(), second.GetEnumerator())
-            | Jit(schedule, min, max) -> upcast new ScheduleJitteredEnumerator(schedule.GetEnumerator(), min, max)
+            | Done -> ValueNone
+            | Now -> ValueSome TimeSpan.Zero
+            | Never -> ValueSome Timeout.InfiniteTimeSpan
+            | Once delay -> ValueSome delay
+            | After delay -> ValueSome delay
+            | Exp(delay, _) -> ValueSome delay
+            | Jit(delay, _, _, _) -> ValueSome delay
+            | Times(schedule, _) -> schedule.Delay
+            | OfArray(delays, current) -> if current >= delays.Length then ValueNone else ValueSome delays.[current]
+            | Max(left, right) ->
+                match left.Delay, right.Delay with
+                | ValueSome a, ValueSome b -> ValueSome (max a b)
+                | ValueNone, ValueNone -> ValueNone
+                | ValueNone, other
+                | other, ValueNone -> other
+            | Min(left, right) ->
+                match left.Delay, right.Delay with
+                | ValueSome a, ValueSome b -> ValueSome (min a b)
+                | ValueNone, ValueNone -> ValueNone
+                | ValueNone, other
+                | other, ValueNone -> other
+            | AndThen(first, second) -> first.Delay |> ValueOption.orElse second.Delay
+        member this.Advance() : Schedule =
+            match this with
+            | Done -> this
+            | Now -> this
+            | Never -> this
+            | After _ -> this
+            | Once _ -> Done
+            | Exp(delay, fac) -> Exp(TimeSpan(int64(double delay.Ticks * fac)), fac)
+            | OfArray(delays, current) -> if current + 1 >= delays.Length then Done else OfArray(delays, current + 1)
+            | Times(schedule, times) -> if times = 1 then Done else Times(schedule.Advance(), times-1) 
+            | Max(left, right) ->
+                let left = left.Advance()
+                let right = right.Advance()
+                match left.Delay, right.Delay with
+                | ValueNone, _
+                | _, ValueNone -> Done
+                | _ -> Max(left, right)
+            | Min(left, right) ->
+                let left = left.Advance()
+                let right = right.Advance()
+                match left.Delay, right.Delay with
+                | ValueNone, ValueNone -> Done
+                | _ -> Min(left, right)
+            | AndThen(first, second) ->
+                let first = first.Advance()
+                match first.Delay with
+                | ValueNone -> second
+                | _ -> AndThen(first, second)
+            | Jit(_, schedule, min, max) ->
+                let schedule = schedule.Advance()
+                match schedule.Delay with
+                | ValueNone -> Done
+                | ValueSome d ->
+                    let ticks = (double d.Ticks)
+                    let random = Random.float ()
+                    let jittered = ticks * min * (1.0 - random) + ticks * max * random
+                    Jit(TimeSpan(int64 jittered), schedule, min, max)
 
 [<RequireQualifiedAccess>]
 module Schedule =
     
     /// Creates a schedule made of explicit sequence of consecutive delays.               
-    let ofSeq (s: TimeSpan seq) : Schedule = OfSeq s          
+    let ofArray (s: TimeSpan[]) : Schedule = OfArray(s, 0) 
     
     /// Creates a schedule with instant execution (no delays) rules.
     let now : Schedule = Now 
@@ -230,11 +254,18 @@ module Schedule =
     let after (delay: TimeSpan) : Schedule = After delay
     
     /// Creates a schedule that will execute passed schedule once and then complete.
-    let once (schedule: Schedule) : Schedule = Once schedule
+    let once (delay: TimeSpan) : Schedule = Once delay
             
     /// Creates a new schedule from existing one, which will modify it's delays by a randomly choosen jittered value
     /// within given `min`-`max` bounds.
-    let jittered (min: double) (max: double) (schedule: Schedule) : Schedule = Jit(schedule, min, max)
+    let jittered (min: double) (max: double) (schedule: Schedule) : Schedule =
+        match schedule.Delay with
+        | ValueSome d ->
+            let ticks = (double d.Ticks)
+            let random = Random.float ()
+            let jittered = ticks * min * (1.0 - random) + ticks * max * random
+            Jit(TimeSpan(int64 jittered), schedule, min, max)
+        | ValueNone -> Done
     
     /// Creates a new schedule from existing one, which will execute it a given number of times before completing.
     let times (count: int) (schedule: Schedule) : Schedule = Times(schedule, count)
@@ -263,6 +294,20 @@ module Schedule =
                     promise.SetCanceled()    
                 )) |> ignore
             upcast promise.Task
+            
+    /// Puts current task to sleep accordingly to a given `schedule`. Result returns an updated schedule.
+    let sleep (cancel: CancellationToken) (schedule: Schedule) : ValueTask<Schedule> = uvtask {
+        if cancel.IsCancellationRequested then return! Task.FromCanceled<Schedule>(cancel)
+        else
+            match schedule.Delay with
+            | ValueNone -> return schedule
+            | ValueSome t when t = Timeout.InfiniteTimeSpan ->
+                do! sleepInfinite cancel
+                return schedule.Advance()
+            | ValueSome d ->
+                do! Task.Delay d
+                return schedule.Advance()
+    }
     
     /// Repeats given action N+1 times (where N is number of `schedule` ticks), spaced by delays provided by a given
     /// `schedule` until that schedule completes: f(), sleep(), f(), sleep(), f().
@@ -272,11 +317,12 @@ module Schedule =
             let result = ResizeArray()
             let! a = f ()
             result.Add a
-            let e = schedule.GetEnumerator()
-            while not cancel.IsCancellationRequested && e.MoveNext() do
-                do! Task.Delay(e.Current, cancel)
+            let mutable s = schedule
+            while not cancel.IsCancellationRequested && ValueOption.isSome s.Delay do
+                do! Task.Delay(s.Delay.Value, cancel)
                 let! a = f ()
                 result.Add a
+                s <- s.Advance()
             return upcast result
     }
 
@@ -286,7 +332,7 @@ module Schedule =
         let mutable result = None
         let mutable exceptions = []
         let mutable lastExn = None
-        let e = schedule.GetEnumerator()
+        let mutable s = schedule
         while not cancel.IsCancellationRequested && cont do
             try
                 let! a = f lastExn
@@ -295,9 +341,21 @@ module Schedule =
             with err ->
                 exceptions <- err::exceptions
                 lastExn <- Some err
-                cont <- e.MoveNext()
-                if cont then
-                    do! Task.Delay(e.Current, cancel)
+                match s.Delay with
+                | ValueSome delay ->
+                    do! Task.Delay(delay, cancel)
+                    s <- s.Advance()
+                | _ -> cont <- false
                     
         return result, List.rev exceptions
+    }
+        
+    /// Converts current schedule into lazily evaluated sequence of delays.
+    let toSeq (schedule: Schedule) : TimeSpan seq = seq {
+        let mutable s = schedule
+        let mutable cont = s.Delay.IsSome
+        while cont do
+            yield s.Delay.Value
+            s <- s.Advance()
+            cont <- s.Delay.IsSome
     }
