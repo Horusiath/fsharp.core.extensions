@@ -5,8 +5,8 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Prolog.fs" />
-    <Compile Include="Random.fs" />
     <Compile Include="Memory.fs" />
+    <Compile Include="Random.fs" />
     <Compile Include="Atomic.fs" />
     <Compile Include="Schedule.fs" />
     <Compile Include="Task.fs" />

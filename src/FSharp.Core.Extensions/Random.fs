@@ -18,6 +18,7 @@ namespace FSharp.Core
 
 open System
 open System
+open System.Buffers.Binary
 open System.Collections.Generic
 
 [<Sealed>]
@@ -42,25 +43,56 @@ module Random =
     
     type internal R = ThreadSafeRandom
 
+    /// Returns a Random instance for current OS thread. Sharing this value between threads is NOT safe operation and
+    /// may cause unexpected behavior.
     let current: Random = R.Current
     
-    /// Mutates provided `array` by filling it with random bytes
+    /// Mutates provided `array` by filling it with random bytes.
+    /// This is a thread safe operation, given that input array access is exclusive for current thread.
     let fill (array: byte[]) = R.Current.NextBytes(array)
     
-    /// Returns an array of randomized bytes of a given `size`.
+    /// Returns an array of randomized bytes of a given `size`. This is a thread safe operation.
     let bytes (size: int) =
         let buf = Array.zeroCreate size
         R.Current.NextBytes buf
         buf
     
+    /// Returns a random byte. This is a thread safe operation.
+    let byte (): byte = byte (abs (R.Current.Next()))
+        
+    /// Returns a random signed byte. This is a thread safe operation.
+    let sbyte (): sbyte = sbyte (R.Current.Next())
+    
+    /// Returns a random 16bit integer. This is a thread safe operation.
+    let int16 (): int16 = int16 (R.Current.Next())
+    
     /// Returns a random 32bit integer. This is a thread safe operation.
     let int32 (): int = R.Current.Next()
 
+    /// Returns a random 64bit integer. This is a thread safe operation.
     let int64 (): int64 =
         let hi = R.Current.Next()
         let lo = R.Current.Next()
         ((int64 hi) <<< 32) ||| (int64 lo)
+    
+    /// Returns a random unsigned 16bit integer. This is a thread safe operation.
+    let uint16 (): uint16 = uint16 (abs (R.Current.Next()))
+    
+    /// Returns a random unsigned 32bit integer. This is a thread safe operation.
+    let uint32 (): uint32 =
+        // since random.Next() is limited to int32 with sign, we must use different approach
+        let s = Span.stackalloc sizeof<uint32>
+        R.Current.NextBytes(s)
+        BitConverter.ToUInt32(Span.op_Implicit s)
+
+    /// Returns a random unsigned 64bit integer. This is a thread safe operation.
+    let uint64 (): uint64 =
+        // since random.Next() is limited to int32 with sign, we must use different approach
+        let s = Span.stackalloc sizeof<uint64>
+        R.Current.NextBytes(s)
+        BitConverter.ToUInt64(Span.op_Implicit s)
         
+    /// Returns a random 64bit floating point number. This is a thread safe operation.
     let float () : float = R.Current.NextDouble()
         
     /// Returns a random 32bit integer in [min, max) range. This is a thread safe operation.
