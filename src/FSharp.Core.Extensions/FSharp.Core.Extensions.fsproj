@@ -6,7 +6,9 @@
   <ItemGroup>
     <Compile Include="Prolog.fs" />
     <Compile Include="Memory.fs" />
+    <Compile Include="Random.fs" />
     <Compile Include="Atomic.fs" />
+    <Compile Include="Schedule.fs" />
     <Compile Include="Task.fs" />
     <Compile Include="Channels.fs" />
     <Compile Include="Actors.fs" />
@@ -17,7 +19,6 @@
     <Compile Include="Enum.fs" />
     <Compile Include="Vec.fs" />
     <Compile Include="Art.fs" />
-    <Compile Include="Random.fs" />
     <Content Include="paket.references" />
   </ItemGroup>
   <Import Project="..\..\.paket\Paket.Restore.targets" />

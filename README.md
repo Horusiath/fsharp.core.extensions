@@ -365,3 +365,43 @@ Current performance benchmarks as compared to F# MailboxProcessor - example of a
 * `FSharpAsyncActor` is F# `MailboxProcessor` implementation.
 * `FSharpActorUnbounded` is Actor implementation from this lib using default (possibly synchronous) message passing.
 * `FSharpActorUnboundedAsync` is Actor implementation from this lib using fully asynchronous message passing.
+
+### Schedules 
+
+While `Task.Delay()` is great way to introduce delays of various kind, sometimes we may need to introduce more advanced delay mechanisms: exponential backoffs, jittered (randomized) delays etc.
+For these cases `Scheduler` module provides composable API, which can be used for multi-step time spacing mechanism:
+
+```fsharp
+// create policy that will execute up to 4 times, with exponential backoff starting from 1 second (1sec, 2sec, 4sec, 8sec)
+// with each tick slightly randomized by 10% margin  
+let policy =
+    Schedule.exponential 2.0 (TimeSpan.FromSeconds 1.)
+    |> Schedule.jittered 0.9 1.1
+    |> Schedule.times 4
+
+// now execute something up to 5 times, gathering result and all potential exceptions that happened along the way
+let! (result, failures) = 
+    policy
+    |> Schedule.retry (fun _ -> uvtask {
+        return! someHttpCall () 
+    }) CancellationToken.None
+
+// you can also execute some action N+1 times, with each time delayed from previous one
+let sw = Stopwatch.StartNew()
+let! results =
+    Schedule.after (TimeSpan.FromMilliseconds 100.)
+    |> Schedule.times 3
+    |> Schedule.spaced (fun _ -> uvtask {
+        printfn "Time passed: %ims" sw.ElapsedMilliseconds
+        return 1
+    }) CancellationToken.None
+
+// Results should look more or less like:
+// Time passed: 0ms
+// Time passed: 100ms
+// Time passed: 200ms
+// Time passed: 300ms
+```
+
+Schedules provide simple composable API and can be serialized/deserialized by any serializer able to handle discriminated unions (keep in mind that `Schedule.ofSeq` will most likely eagerly evaluate provided sequence in order to serialize it).
+Schedules are immutable (advancing a schedule simply produces another, updated schedule), so that they can be safely shared between threads and persisted if necessary. Schedules can be converted into ordinary sequences using `Schedule.toSeq` function. 

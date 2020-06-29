@@ -13,12 +13,16 @@
     <Compile Include="EnumTests.fs" />
     <Compile Include="AsyncSeqTests.fs" />
     <Compile Include="ChannelTests.fs" />
+    <Compile Include="ScheduleTests.fs" />
     <Compile Include="ActorTests.fs" />
     <Compile Include="Main.fs" />
     <Content Include="paket.references" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\FSharp.Core.Extensions\FSharp.Core.Extensions.fsproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="FsPickler" Version="5.3.2" />
   </ItemGroup>
   <Import Project="..\..\.paket\Paket.Restore.targets" />
 </Project>
