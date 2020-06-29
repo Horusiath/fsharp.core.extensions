@@ -25,6 +25,14 @@ open System.Threading.Tasks
 open FSharp.Control.Tasks.Builders.Unsafe
 open FSharp.Core
 
+/// Schedule is an immutable data type, that allows to apply iterator pipeline over non-blocking delays and timeouts.
+/// Schedule can put current Task/ValueTask to sleep via `Schedule.sleep` function. It can also be persisted and resumed
+/// afterwards.
+///
+/// Core concepts involve:
+///
+/// - `Delay` property, which returns a next Delay computed by this schedule, or ValueNone in case when current schedule has finished.
+/// - `Advance` method which returns an updated schedule with next computed value in timeline progression.
 type Schedule =
     | Done
     | Now
@@ -123,14 +131,14 @@ module Schedule =
     let once (delay: TimeSpan) : Schedule = Once delay
             
     /// Creates a new schedule from existing one, which will modify it's delays by a randomly choosen jittered value
-    /// within given `min`-`max` bounds.
+    /// within given `min`-`max` bounds, which describe percentage of shift eg.: 0.7 means 70% of original value.
     let jittered (min: double) (max: double) (schedule: Schedule) : Schedule =
         match schedule.Delay with
         | ValueSome d ->
             let ticks = (double d.Ticks)
             let random = Random.float ()
-            let jittered = ticks * min * (1.0 - random) + ticks * max * random
-            Jit(TimeSpan(int64 jittered), schedule, min, max)
+            let jit = ticks * min * (1.0 - random) + ticks * max * random
+            Jit(TimeSpan(int64 jit), schedule, min, max)
         | ValueNone -> Done
     
     /// Creates a new schedule from existing one, which will execute it a given number of times before completing.
@@ -162,18 +170,18 @@ module Schedule =
             upcast promise.Task
             
     /// Puts current task to sleep accordingly to a given `schedule`. Result returns an updated schedule.
-    let sleep (cancel: CancellationToken) (schedule: Schedule) : ValueTask<Schedule> = uvtask {
-        if cancel.IsCancellationRequested then return! Task.FromCanceled<Schedule>(cancel)
+    let sleep (cancel: CancellationToken) (schedule: Schedule) : ValueTask<Schedule> =
+        if cancel.IsCancellationRequested then ValueTask<Schedule>(Task.FromCanceled<Schedule>(cancel))
         else
             match schedule.Delay with
-            | ValueNone -> return schedule
-            | ValueSome t when t = Timeout.InfiniteTimeSpan ->
+            | ValueNone -> ValueTask<_> schedule
+            | ValueSome t when t = TimeSpan.Zero -> ValueTask<_> (schedule.Advance())
+            | ValueSome t when t = Timeout.InfiniteTimeSpan -> uvtask {
                 do! sleepInfinite cancel
-                return schedule.Advance()
-            | ValueSome d ->
+                return schedule.Advance() }
+            | ValueSome d -> uvtask {
                 do! Task.Delay d
-                return schedule.Advance()
-    }
+                return schedule.Advance() }
     
     /// Repeats given action N+1 times (where N is number of `schedule` ticks), spaced by delays provided by a given
     /// `schedule` until that schedule completes: f(), sleep(), f(), sleep(), f().
@@ -192,7 +200,9 @@ module Schedule =
             return upcast result
     }
 
-    /// Executes given action and retries is until success or until schedule completes.
+    /// Executes given action and retries is until success or until schedule completes. Produced result is a tuple,
+    /// which first element is an option with successful result (if any was produced) and a list of failures that caused
+    /// retry to trigger along the way (if any where thrown).
     let retry (f: exn option -> ValueTask<'a>) (cancel: CancellationToken) (schedule: Schedule) : ValueTask<('a option * exn list)> = uvtask {
         let mutable cont = true
         let mutable result = None
