@@ -56,6 +56,18 @@ module Task =
         with e ->
             return Error e
     }
+    
+    /// Runs two tasks in parallel, returning a result of the one which completed first
+    /// while disposing the other.
+    let race (left: Task<'a>) (right: Task<'b>) : Task<Choice<'a,'b>> = task {
+        use t1 = left :> Task
+        use t2 = right :> Task
+        let! finished = Task.WhenAny(t1, t2)
+        if obj.ReferenceEquals(finished, t1) then
+            return Choice1Of2 left.Result
+        else
+            return Choice2Of2 right.Result
+    }
         
     let inline run (f: unit -> Task<'a>) : Task<'a> = Task.Run<'a>(Func<_>(f))
     
