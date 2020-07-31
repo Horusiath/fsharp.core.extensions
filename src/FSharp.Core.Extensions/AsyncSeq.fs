@@ -23,6 +23,7 @@ open System.Collections.Generic
 open System.Runtime.ExceptionServices
 open System.Threading
 open FSharp.Control.Tasks.Builders
+open FSharp.Control.Tasks.Builders.Unsafe
 open System.Threading.Channels
 open System.Threading.Tasks
 
@@ -34,6 +35,8 @@ module AsyncSeq =
     let inline private rethrow (e: exn) =
         ExceptionDispatchInfo.Capture(e).Throw()
         Unchecked.defaultof<_>
+        
+    let cancelled (cancel: CancellationToken) = ValueTask<bool>(Task.FromCanceled<bool>(cancel))
         
     /// Modifies provided async sequence into the one which will apply
     /// a provided cancellation token upon async enumerator creation.
@@ -48,7 +51,8 @@ module AsyncSeq =
                 { new IAsyncEnumerator<'a> with
                     member __.Current = failwith "AsyncEnumerator is empty"
                     member __.DisposeAsync() = ValueTask()
-                    member __.MoveNextAsync() = ValueTask<_>(false) } }
+                    member __.MoveNextAsync() =
+                        if cancel.IsCancellationRequested then cancelled cancel else ValueTask<_>(false) } }
         
     /// Returns the same `value` over and over until a cancellation token triggers.
     let repeat (value: 'a): AsyncSeq<'a> =
@@ -58,7 +62,7 @@ module AsyncSeq =
                     member __.Current = value
                     member __.DisposeAsync() = ValueTask()
                     member __.MoveNextAsync() =
-                        if cancel.IsCancellationRequested then ValueTask<_>(false)
+                        if cancel.IsCancellationRequested then cancelled cancel
                         else ValueTask<_>(true) } }
         
     let private timerCallback = TimerCallback(fun state ->
@@ -80,15 +84,15 @@ module AsyncSeq =
                     member __.DisposeAsync() =
                         stopwatch.Stop()
                         timer.DisposeAsync()
-                    member __.MoveNextAsync() = vtask {
-                        if cancel.IsCancellationRequested then return false
-                        else
+                    member __.MoveNextAsync() = 
+                        if cancel.IsCancellationRequested then cancelled cancel
+                        else uvtask {
                             do! (!promise).Task
                             promise := TaskCompletionSource<unit>()
                             current <- stopwatch.Elapsed
                             stopwatch.Restart()
                             return true
-                    } } }
+                        } } }
         
     /// Returns a task, which will pull all incoming elements from a given sequence
     /// or until token has cancelled, and pushes them to a given channel writer.
@@ -300,17 +304,17 @@ module AsyncSeq =
                     try worker.Dispose() with _ -> ()
                 iwriter.TryComplete() |> ignore
             }
-            member __.MoveNextAsync() = vtask {
-                if cancel.IsCancellationRequested then return false
-                elif oreader.TryRead(&current) then return true
-                elif remaining = 0 then return false
-                else
+            member __.MoveNextAsync() = 
+                if cancel.IsCancellationRequested then cancelled cancel
+                elif oreader.TryRead(&current) then ValueTask<_>(true)
+                elif Volatile.Read(&remaining) = 0 then ValueTask<_>(false)
+                else uvtask {
                     let! ready = oreader.WaitToReadAsync(cancel)
                     if ready && oreader.TryRead(&current) then 
                         return true
                     else                      
                         return false
-            }
+                }
     
     /// Iterates over all elements of provided async sequence in parallel.
     let mapParallel (parallelism: int) (f: 'a -> ValueTask<'b>) (upstream: AsyncSeq<'a>): AsyncSeq<'b> =
@@ -329,9 +333,9 @@ module AsyncSeq =
                 { new IAsyncEnumerator<'b> with
                     member __.Current = !current
                     member __.DisposeAsync() = inner.DisposeAsync()
-                    member __.MoveNextAsync() = vtask {
-                        if cancel.IsCancellationRequested then return false
-                        else
+                    member __.MoveNextAsync() = 
+                        if cancel.IsCancellationRequested then cancelled cancel
+                        else uvtask {
                             let! cont = inner.MoveNextAsync()
                             if cont then
                                 let! b = f counter inner.Current
@@ -339,7 +343,7 @@ module AsyncSeq =
                                 counter <- counter + 1L
                                 return true
                             else return false
-                    } }}
+                        } }}
       
     /// Returns a new async sequence constructed from provided one transformed by applying
     /// mapping function over all input elements.  
@@ -356,16 +360,16 @@ module AsyncSeq =
                 { new IAsyncEnumerator<'b> with
                     member __.Current = current
                     member __.DisposeAsync() = inner.DisposeAsync()
-                    member __.MoveNextAsync() = vtask {
-                        if cancel.IsCancellationRequested then return false
-                        else
+                    member __.MoveNextAsync() = 
+                        if cancel.IsCancellationRequested then cancelled cancel
+                        else uvtask {
                             let! cont = inner.MoveNextAsync()
                             if cont then
                                 current <- f counter inner.Current
                                 counter <- counter + 1L
                                 return true
                             else return false
-                    } }}
+                        } }}
       
     /// Returns a new async sequence constructed from provided one transformed by applying
     /// mapping function over all input elements.  
@@ -490,9 +494,10 @@ module AsyncSeq =
                         do! e.DisposeAsync()
                     input.Writer.TryComplete() |> ignore
             }
-            member this.MoveNextAsync() = vtask {
-                if cancel.IsCancellationRequested || enums.Count = 0 then return false
-                else
+            member this.MoveNextAsync() = 
+                if cancel.IsCancellationRequested then cancelled cancel
+                elif enums.Count = 0 then ValueTask<_>(false)
+                else uvtask {
                     let! ready = input.Reader.WaitToReadAsync(cancel)
                     if ready then
                         let (has, next) = input.Reader.TryRead()
@@ -501,7 +506,7 @@ module AsyncSeq =
                             return true
                         else return false
                     else return false
-            }
+                }
     
     /// Merges a collection of async sequences together, emitting output of each one of them
     /// (obtained in parallel) as an input of result async sequence. Returned sequence will
@@ -723,9 +728,10 @@ module AsyncSeq =
                     { new IAsyncEnumerator<'a> with
                         member __.Current = current
                         member __.DisposeAsync() = inner.DisposeAsync()
-                        member __.MoveNextAsync() = vtask {
-                            if cancel.IsCancellationRequested || fullfiled.Task.IsCompleted then return false
-                            else
+                        member __.MoveNextAsync() = 
+                            if cancel.IsCancellationRequested then cancelled cancel
+                            elif fullfiled.Task.IsCompleted then ValueTask<_>(false)
+                            else uvtask {
                                 let! hasNext = inner.MoveNextAsync()
                                 if hasNext then
                                     current <- inner.Current
@@ -735,7 +741,7 @@ module AsyncSeq =
                                         return false
                                     else return true
                                 else return false
-                        } }}
+                            } }}
         let after =
             { new AsyncSeq<'a> with
                 member __.GetAsyncEnumerator (cancel) =
@@ -744,15 +750,16 @@ module AsyncSeq =
                     { new IAsyncEnumerator<'a> with
                         member __.Current = inner.Current
                         member __.DisposeAsync() = inner.DisposeAsync()
-                        member __.MoveNextAsync() = vtask {
-                            if cancel.IsCancellationRequested then return false
-                            elif not (isNull awaiter) then
-                                let a = awaiter
-                                awaiter <- null
-                                return! a.Task
-                            else
-                                return! inner.MoveNextAsync()
-                        } }}
+                        member __.MoveNextAsync() = 
+                            if cancel.IsCancellationRequested then cancelled cancel
+                            else uvtask {
+                                if not (isNull awaiter) then
+                                    let a = awaiter
+                                    awaiter <- null
+                                    return! a.Task
+                                else
+                                    return! inner.MoveNextAsync()
+                            } }}
         (before, after)
         
     /// Similar to fold, but it's not a terminal operation.
@@ -765,9 +772,9 @@ module AsyncSeq =
                 { new IAsyncEnumerator<'s> with
                     member __.Current = state
                     member __.DisposeAsync() = inner.DisposeAsync()
-                    member __.MoveNextAsync() = vtask {
-                        if cancel.IsCancellationRequested then return false
-                        else
+                    member __.MoveNextAsync() = 
+                        if cancel.IsCancellationRequested then cancelled cancel
+                        else uvtask {
                             let! hasNext = inner.MoveNextAsync()
                             if hasNext then
                                 let! state' = f state inner.Current
@@ -775,7 +782,7 @@ module AsyncSeq =
                                 return true
                             else
                                 return false
-                    } }}
+                        } }}
     
     /// Shifts an element emission in time by delaying it by timeout generated by `timeoutFn` for that specific element.
     /// Since delay uses a function, it's very easy to implement things like eg. exponential backoff.
@@ -786,16 +793,16 @@ module AsyncSeq =
                 { new IAsyncEnumerator<'a> with
                     member __.Current = inner.Current
                     member __.DisposeAsync() = inner.DisposeAsync()
-                    member __.MoveNextAsync() = vtask {
-                        if cancel.IsCancellationRequested then return false
-                        else
+                    member __.MoveNextAsync() = 
+                        if cancel.IsCancellationRequested then cancelled cancel
+                        else uvtask {
                             let! hasNext = inner.MoveNextAsync()
                             if not hasNext then return false
                             else
                                 let timeout = timeoutFn inner.Current
                                 do! Task.Delay(timeout, cancel)
                                 return true
-                    } } }
+                        } } }
         
     
     /// Groups incoming elements into chunks of size `n`, and returns an async sequence of chunks.
@@ -940,10 +947,10 @@ module AsyncSeq =
                 { new IAsyncEnumerator<'a> with
                     member __.Current = inner.Current
                     member __.DisposeAsync() = inner.Dispose(); ValueTask()
-                    member __.MoveNextAsync() = vtask {
-                        if cancel.IsCancellationRequested then return false
-                        else return inner.MoveNext()
-                    } } }
+                    member __.MoveNextAsync() = 
+                        if cancel.IsCancellationRequested then cancelled cancel
+                        else ValueTask<_>(inner.MoveNext())
+                    } }
     
     /// Creates an async sequence out of the provided function. Function takes as an input every subsequent call counter
     /// (starting from 0L) and outputs as value task with optional value. Once a None value will be emitted,
@@ -956,9 +963,9 @@ module AsyncSeq =
                 { new IAsyncEnumerator<'a> with
                     member __.Current = current
                     member __.DisposeAsync() = ValueTask()
-                    member __.MoveNextAsync() = vtask {
-                        if cancel.IsCancellationRequested then return false
-                        else
+                    member __.MoveNextAsync() =
+                        if cancel.IsCancellationRequested then cancelled cancel
+                        else uvtask {
                             let! next = f i
                             match next with
                             | Some value ->
@@ -967,7 +974,7 @@ module AsyncSeq =
                                 return true
                             | None ->
                                 return false
-                    } } }
+                        } } }
         
     /// Wraps given Task producing function with an async sequence, which will emit a result of a task and then complete.
     /// A cancellation token passed from async enumerator can be used within task produced function to interrupt it.
@@ -979,18 +986,20 @@ module AsyncSeq =
                 { new IAsyncEnumerator<'a> with
                     member __.Current = task.Result
                     member __.DisposeAsync() = task.Dispose(); ValueTask()
-                    member __.MoveNextAsync() = vtask {
-                        if completed then return false
-                        else
-                            if task.IsCompletedSuccessfully then
-                                completed <- true
-                                return true
-                            elif task.IsCanceled then return false
+                    member __.MoveNextAsync() =
+                        if cancel.IsCancellationRequested then cancelled cancel
+                        else uvtask {
+                            if completed then return false
                             else
-                                let! _ = task
-                                completed <- true
-                                return true
-                    } } }
+                                if task.IsCompletedSuccessfully then
+                                    completed <- true
+                                    return true
+                                elif task.IsCanceled then return false
+                                else
+                                    let! _ = task
+                                    completed <- true
+                                    return true
+                        } } }
      
     /// Wraps given `task` with an async sequence, which will emit a result of a task and then complete. 
     let ofTask (task: Task<'a>): AsyncSeq<'a> = ofTaskCancellable (fun _ -> task)
@@ -1003,15 +1012,17 @@ module AsyncSeq =
                 { new IAsyncEnumerator<'a> with
                     member __.Current = result.Value
                     member __.DisposeAsync() = ValueTask()
-                    member __.MoveNextAsync() = vtask {
-                        match result with
-                        | None ->
-                            let! r = a
-                            result <- Some r
-                            return true
-                        | Some _ ->
-                            return false
-                    } } }
+                    member __.MoveNextAsync() = 
+                        if cancel.IsCancellationRequested then cancelled cancel
+                        else uvtask {
+                            match result with
+                            | None ->
+                                let! r = a
+                                result <- Some r
+                                return true
+                            | Some _ ->
+                                return false
+                        } } }
     
     /// Returns an async sequence, that produces only a one element and then closes.    
     let singleton (value: 'a): AsyncSeq<'a> =
@@ -1021,14 +1032,16 @@ module AsyncSeq =
                 { new IAsyncEnumerator<'a> with
                     member __.Current = result.Value
                     member __.DisposeAsync() = ValueTask()
-                    member __.MoveNextAsync() = vtask {
-                        match result with
-                        | None ->
-                            result <- Some value
-                            return true
-                        | Some _ ->
-                            return false
-                    } } }
+                    member __.MoveNextAsync() = 
+                        if cancel.IsCancellationRequested then cancelled cancel
+                        else uvtask {
+                            match result with
+                            | None ->
+                                result <- Some value
+                                return true
+                            | Some _ ->
+                                return false
+                        } } }
         
     /// Returns an async sequence, that produces element if provided value was Some. Otherwise it will be completed.    
     let ofOption (value: 'a option): AsyncSeq<'a> =
@@ -1038,12 +1051,14 @@ module AsyncSeq =
                 { new IAsyncEnumerator<'a> with
                     member __.Current = value.Value
                     member __.DisposeAsync() = ValueTask()
-                    member __.MoveNextAsync() = vtask {
-                        if pulled then return false
-                        else
-                            pulled <- true
-                            return true
-                    } } }
+                    member __.MoveNextAsync() =
+                        if cancel.IsCancellationRequested then cancelled cancel
+                        else uvtask {
+                            if pulled then return false
+                            else
+                                pulled <- true
+                                return true
+                        } } }
         
     /// Returns an async sequence, that reads elements from a given channel reader.
     let inline ofChannel (ch: ChannelReader<'a>): AsyncSeq<'a> = ch.ReadAllAsync()
@@ -1083,21 +1098,23 @@ module AsyncSeq =
                     { new IAsyncEnumerator<'a> with
                         member __.Current = inner.Current
                         member __.DisposeAsync() = inner.DisposeAsync()
-                        member __.MoveNextAsync() = vtask {
-                            if isNull period || period.IsCompleted then
-                                period <- Task.Delay(timeout)
-                                remaining <- count
-                                let! hasNext = inner.MoveNextAsync()
-                                if hasNext then
-                                   remaining <- remaining - 1
-                                return hasNext                                
-                            elif remaining = 0 then
-                                do! period // trigger throttling
-                                return! inner.MoveNextAsync()
-                            else
-                                remaining <- remaining - 1
-                                return! inner.MoveNextAsync()
-                        } } }
+                        member __.MoveNextAsync() = 
+                            if cancel.IsCancellationRequested then cancelled cancel
+                            else uvtask {
+                                if isNull period || period.IsCompleted then
+                                    period <- Task.Delay(timeout)
+                                    remaining <- count
+                                    let! hasNext = inner.MoveNextAsync()
+                                    if hasNext then
+                                       remaining <- remaining - 1
+                                    return hasNext                                
+                                elif remaining = 0 then
+                                    do! period // trigger throttling
+                                    return! inner.MoveNextAsync()
+                                else
+                                    remaining <- remaining - 1
+                                    return! inner.MoveNextAsync()
+                            } } }
             
     /// Returns an async sequence, that will monitor the rate at which input elements are
     /// incoming, and in case when no element what produce before a given `timeout` has passed
@@ -1127,17 +1144,19 @@ module AsyncSeq =
                 { new IAsyncEnumerator<'a> with
                     member __.Current = inner.Current
                     member __.DisposeAsync() = inner.DisposeAsync()
-                    member __.MoveNextAsync() = vtask {
-                        if isNull pending then
-                            let t = inner.MoveNextAsync()
-                            if t.IsCompletedSuccessfully then
-                                current <- inner.Current
-                                return t.Result
-                            else
-                                pending <- t.AsTask()
-                                return! handleAsync()                                
-                        else return! handleAsync()
-                    } } }
+                    member __.MoveNextAsync() = 
+                        if cancel.IsCancellationRequested then cancelled cancel
+                        else uvtask {
+                            if isNull pending then
+                                let t = inner.MoveNextAsync()
+                                if t.IsCompletedSuccessfully then
+                                    current <- inner.Current
+                                    return t.Result
+                                else
+                                    pending <- t.AsTask()
+                                    return! handleAsync()                                
+                            else return! handleAsync()
+                        } } }
     
     /// Deduplicates a consecutive input elements, skipping all elements,
     /// that were considered equal using given equality comparer function. 
@@ -1149,21 +1168,23 @@ module AsyncSeq =
                 { new IAsyncEnumerator<'a> with
                     member __.Current = inner.Current
                     member __.DisposeAsync() = inner.DisposeAsync()
-                    member __.MoveNextAsync() = vtask {
-                        let! hasNext = inner.MoveNextAsync()
-                        let mutable hasNext' = hasNext
-                        let mutable skipped' = true
-                        while hasNext' && skipped' do
-                            match last with
-                            | Some l when equal l inner.Current ->
-                                let! hasNext = inner.MoveNextAsync()
-                                hasNext' <- hasNext
-                                skipped' <- true
-                            | _ ->
-                                last <- Some inner.Current
-                                skipped' <- false
-                        return hasNext'
-                    } } }
+                    member __.MoveNextAsync() = 
+                        if cancel.IsCancellationRequested then cancelled cancel
+                        else uvtask {
+                            let! hasNext = inner.MoveNextAsync()
+                            let mutable hasNext' = hasNext
+                            let mutable skipped' = true
+                            while hasNext' && skipped' do
+                                match last with
+                                | Some l when equal l inner.Current ->
+                                    let! hasNext = inner.MoveNextAsync()
+                                    hasNext' <- hasNext
+                                    skipped' <- true
+                                | _ ->
+                                    last <- Some inner.Current
+                                    skipped' <- false
+                            return hasNext'
+                        } } }
       
     type private InterleavingState =
         | None = 0
@@ -1188,9 +1209,9 @@ module AsyncSeq =
                 { new IAsyncEnumerator<'a> with
                     member __.Current = current
                     member __.DisposeAsync() = inner.DisposeAsync()
-                    member __.MoveNextAsync() = vtask {
-                        if cancel.IsCancellationRequested then return false
-                        else
+                    member __.MoveNextAsync() = 
+                        if cancel.IsCancellationRequested then cancelled cancel
+                        else uvtask {
                             match state with
                             | InterleavingState.Interleaved ->
                                 current <- next
@@ -1211,7 +1232,7 @@ module AsyncSeq =
                                     prev <- inner.Current
                                     current <- inner.Current
                                 return hasNext
-                    } } }
+                        } } }
 
     /// Groups incoming events by provided key selector, returning an async sequence
     /// which return pair of produced key and newly produced output. To avoid pulling
@@ -1257,9 +1278,9 @@ module AsyncSeq =
                         disposed <- true
                         ValueTask(receiver :> Task)
                     member __.MoveNextAsync() =
-                        if out.TryRead(&current)
-                        then ValueTask<_> true
-                        else Unsafe.uvtask {
+                        if cancel.IsCancellationRequested then cancelled cancel
+                        elif out.TryRead(&current) then ValueTask<_> true
+                        else uvtask {
                             let! hasNext = out.WaitToReadAsync()
                             if hasNext && out.TryRead(&current)
                             then return true
@@ -1276,10 +1297,10 @@ module AsyncSeq =
                 { new IAsyncEnumerator<_> with
                     member __.Current = Unchecked.defaultof<_>
                     member __.DisposeAsync() = ValueTask()
-                    member __.MoveNextAsync() = vtask {
-                        if cancel.IsCancellationRequested then return false
-                        else return raise e
-                    } } }
+                    member __.MoveNextAsync() = 
+                        if cancel.IsCancellationRequested then cancelled cancel
+                        else ValueTask<bool>(Task.FromException<bool>(e))
+                    } }
 
     /// Waits until all elements of the upstream sequence arrive, but discards them.
     let ignore (upstream: AsyncSeq<'a>) = unitVtask {

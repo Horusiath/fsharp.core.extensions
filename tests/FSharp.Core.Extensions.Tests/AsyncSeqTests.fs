@@ -228,9 +228,10 @@ let tests =
                 |> AsyncSeq.ofSeq
                 |> AsyncSeq.withCancellation cts.Token
                 |> AsyncSeq.collect
-                |> eval
-                |> List.ofSeq
-            Expect.equal actual [] "cancellation should work on the underlying data type"
+                |> Task.ofValueTask
+                |> Task.secure
+                |> Task.wait
+            Expect.isError actual "cancellation should work on the underlying data type"
             
         testCase "grouped should chop incoming element into even batches" <| fun _ ->
             let actual =
@@ -325,17 +326,6 @@ let tests =
                 |> eval
                 |> List.ofSeq
             Expect.containsAll actual [|2..41|] "result should contain necessary elements"
-            
-        testCase "repeat should respect cancellation token" <| fun _ ->
-            use cancel = new CancellationTokenSource()
-            cancel.Cancel()
-            let actual =
-                AsyncSeq.repeat "hello"
-                |> AsyncSeq.withCancellation cancel.Token
-                |> AsyncSeq.collect
-                |> eval
-                |> List.ofSeq
-            Expect.equal actual [] "AsyncSeq.repeat should be cancelled"
             
         testCase "repeat should be composable into range sequence" <| fun _ ->
             let actual =
