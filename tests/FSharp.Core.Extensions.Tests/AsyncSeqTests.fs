@@ -383,7 +383,8 @@ let tests =
                 |> List.ofSeq
             Expect.equal actual expected "merge should return ordered result"
             
-        testProperty "groupBy should work" <| fun (input: int list) ->
+        ftestProperty "groupBy should work" <| fun (input: int list) ->
+            printfn "Sample: %O" input
             let expected =
                 input
                 |> Seq.groupBy (fun i -> i % 100)
@@ -392,7 +393,7 @@ let tests =
             let actual =
                 input
                 |> AsyncSeq.ofSeq
-                |> AsyncSeq.groupBy 50 10 (fun i -> i % 100)
+                |> AsyncSeq.groupBy 100 10 (fun i -> i % 100)
                 |> AsyncSeq.mapParallel 10 (fun (k, s) -> vtask {
                     let! items = s |> AsyncSeq.collect
                     return (k, Set.ofSeq items)
@@ -400,6 +401,7 @@ let tests =
                 |> AsyncSeq.collect
                 |> eval
                 |> Map.ofSeq
+            printfn "Done"
             Expect.equal actual expected "groupBy should return correct groups"
             for (KeyValue(k, v)) in actual do
                 Expect.all v (fun i -> i % 100 = k) "groups should be created correctly"
@@ -480,25 +482,30 @@ let tests =
             Expect.isFalse (eval <| enum.MoveNextAsync()) "4rd pull should notice closed upstream"
             enum.DisposeAsync() |> ueval
             
-        testCase "timer should not produce events before expected interval" <| fun _ ->
+        testCase "timer should not produce events before expected interval" <| fun _ -> 
             // Scenario: we configure timer to tick every 100ms but... downstream we wait for 500ms
             // what we DON'T want to see, is a "cumulative" ticking (so after 500ms, we don't want to yield 4-5 ticks in a row)
             let aseq = AsyncSeq.timer (TimeSpan.FromMilliseconds 100.)
             let enum = aseq.GetAsyncEnumerator()
-            Expect.isTrue (eval <| enum.MoveNextAsync()) "1st pull"
-            Expect.isGreaterThanOrEqual enum.Current (TimeSpan.FromMilliseconds 100.) "1st pull is delayed by 100ms"
-            
-            Thread.Sleep 500
+            try (unitTask {
+                let! hasNext = enum.MoveNextAsync()
+                Expect.isTrue hasNext "1st pull"
+                Expect.isGreaterThanOrEqual enum.Current (TimeSpan.FromMilliseconds 100.) "1st pull is delayed by 100ms"
+                
+                do! Task.Delay 500
 
-            Expect.isTrue (eval <| enum.MoveNextAsync()) "2nd pull"
-            Expect.isGreaterThanOrEqual enum.Current (TimeSpan.FromMilliseconds 500.) "2nd pull is delayed by 500ms because of sleep in current thread"
+                let! hasNext = enum.MoveNextAsync()
+                Expect.isTrue hasNext "2nd pull"
+                Expect.isGreaterThanOrEqual enum.Current (TimeSpan.FromMilliseconds 500.) "2nd pull is delayed by 500ms because of sleep in current thread"
 
-            Expect.isTrue (eval <| enum.MoveNextAsync()) "3rd pull"
-            Expect.isGreaterThanOrEqual enum.Current (TimeSpan.FromMilliseconds 100.) "3rd pull shouldn't be immediate even though 2nd was delayed"
+                let! hasNext = enum.MoveNextAsync()
+                Expect.isTrue hasNext "3rd pull"
+                // since timer is not super precise use 85ms to give an error margin
+                Expect.isGreaterThanOrEqual enum.Current (TimeSpan.FromMilliseconds 85.) "3rd pull shouldn't be immediate even though 2nd was delayed" }).GetAwaiter().GetResult()
+            finally
+                (enum :> IAsyncDisposable).DisposeAsync() |> ueval
             
-            enum.DisposeAsync() |> ueval
-            
-        testCase "into should push items into channel" <| fun _ ->
+        testCase "into(true) should push items into channel" <| fun _ ->
             let (writer, reader) = Channel.unboundedSpsc ()
             AsyncSeq.ofSeq [1;2;3]
             |> AsyncSeq.into true writer
@@ -524,7 +531,7 @@ let tests =
             let mutable item = Unchecked.defaultof<_>
             Expect.isTrue (reader.TryRead(&item)) "reader should read 1st element"
             Expect.equal item 1 "1st element is 1"
-            Expect.isTrue (reader.TryRead(&item)) "only 1 element was pushed"
+            Expect.isFalse (reader.TryRead(&item)) "only 1 element was pushed"
             
             Expect.isFalse reader.Completion.IsCompleted "AsyncSeq.into(false) should keep open channel upon completion"
             

@@ -266,7 +266,7 @@ module AsyncSeq =
                 let! next = input.Reader.ReadAsync(cancel)
                 let! o = map next
                 do! output.Writer.WriteAsync(o, cancel)
-            Interlocked.Decrement(&remaining) 
+            Interlocked.Decrement(&remaining) |> ignore
         })
         let reader = Task.Run(Func<Task>(fun () -> unitTask {
             let mutable cont = not cancel.IsCancellationRequested 
@@ -452,12 +452,13 @@ module AsyncSeq =
     type private MergeParallelEnumerator<'a>(enums: ResizeArray<IAsyncEnumerator<'a>>, cancel: CancellationToken) =
         let input = Channel.CreateBounded<'a>(1)
         let mutable current = Unchecked.defaultof<_>
+        let active = atom true
         let tasks =
             enums
             |> Seq.map (fun e -> Task.Run(Func<Task>(fun () -> unitTask {
                 let! hasNext = e.MoveNextAsync()
                 let mutable hasNext' = hasNext
-                while not cancel.IsCancellationRequested && hasNext' do
+                while active.Value() && not cancel.IsCancellationRequested && hasNext' do
                     let current = e.Current
                     do! input.Writer.WriteAsync(current, cancel)
                     let! hasNext = e.MoveNextAsync()
@@ -469,11 +470,10 @@ module AsyncSeq =
         interface IAsyncEnumerator<'a> with
             member __.Current = current
             member this.DisposeAsync() = unitVtask {
-                for e in enums do
-                    do! e.DisposeAsync()
-                for t in tasks do
-                    t.Dispose()
-                input.Writer.TryComplete() |> ignore
+                if active.Swap false then
+                    for e in enums do
+                        do! e.DisposeAsync()
+                    input.Writer.TryComplete() |> ignore
             }
             member this.MoveNextAsync() = vtask {
                 if cancel.IsCancellationRequested || enums.Count = 0 then return false
@@ -1197,74 +1197,7 @@ module AsyncSeq =
                                     current <- inner.Current
                                 return hasNext
                     } } }
-            
-    [<Sealed>]
-    type internal GroupByAgent<'a, 'b>(cap: int, key: 'b, cancel: CancellationToken) =
-        let chan = Channel.CreateBounded<'a>(cap)
-        let mutable completed = false
-        member __.Push(item) = chan.Writer.WriteAsync(item, cancel)
-        member __.AsyncSeq() = 
-            { new AsyncSeq<_> with
-                member __.GetAsyncEnumerator (cancel) =
-                    let mutable current = Unchecked.defaultof<_>
-                    { new IAsyncEnumerator<_> with
-                        member __.Current = current
-                        member __.DisposeAsync() = chan.Writer.Complete(); ValueTask()
-                        member __.MoveNextAsync() = vtask {
-                            if cancel.IsCancellationRequested then return false
-                            else
-                                match chan.Reader.TryRead() with
-                                | true, item ->
-                                    current <- item
-                                    return true
-                                | false, _ ->
-                                    // even if we were completed, we should saturate channel before completion
-                                    if completed then return false
-                                    else
-                                        let! cont = chan.Reader.WaitToReadAsync(cancel)
-                                        if cont then
-                                            match chan.Reader.TryRead() with
-                                            | true, item ->
-                                                current <- item
-                                                return true
-                                            | false, _ -> return false
-                                        else return false
-                        } } }
-        member __.Complete() = completed <- true
-        
-    [<Sealed>]
-    type internal GroupByReader<'a, 'b when 'b: equality>(capacity: int, childCapacity, selector: 'a -> 'b, cancel: CancellationToken, enumerator: IAsyncEnumerator<'a>) =
-        let chan = Channel.CreateBounded<('b * AsyncSeq<'a>)>(capacity)
-        let children = System.Collections.Generic.Dictionary<'b, GroupByAgent<'a,'b>>(capacity)
-        let complete() = 
-            chan.Writer.TryComplete() |> ignore
-            for e in children do
-                e.Value.Complete()
-        let task = Task.Run(Func<Task>(fun () -> unitTask {
-            let mutable cont = not cancel.IsCancellationRequested 
-            while cont do
-                let! hasNext = enumerator.MoveNextAsync()
-                if hasNext then
-                    let item = enumerator.Current
-                    let key = selector item
-                    match children.TryGetValue(key) with
-                    | true, agent ->
-                        do! agent.Push(item)
-                    | false, _ ->
-                        let agent = new GroupByAgent<'a, 'b>(childCapacity, key, cancel)
-                        children.[key] <- agent
-                        do! chan.Writer.WriteAsync((key, agent.AsyncSeq()), cancel)
-                        do! agent.Push(item)
-                else cont <- false
-            complete()
-        }))
-        member __.AsyncSeq() = chan.Reader.ReadAllAsync()
-        interface IAsyncDisposable with
-            member __.DisposeAsync() = unitVtask {
-                task.Dispose()
-                complete()
-            }
-        
+
     /// Groups incoming events by provided key selector, returning an async sequence
     /// which return pair of produced key and newly produced output. To avoid pulling
     /// unbounded load, `maxActiveGroups` can be specified to limit the max number of
@@ -1273,12 +1206,53 @@ module AsyncSeq =
     let groupBy (maxActiveGroups: int) (capacityPerGroup: int) (fn: 'a -> 'b) (upstream: AsyncSeq<'a>): AsyncSeq<('b * AsyncSeq<'a>)> =
         { new AsyncSeq<_> with
             member __.GetAsyncEnumerator (cancel) =
-                let reader = GroupByReader<'a, 'b>(maxActiveGroups, capacityPerGroup, fn, cancel, upstream.GetAsyncEnumerator(cancel))
-                let inner = reader.AsyncSeq().GetAsyncEnumerator(cancel)
-                { new IAsyncEnumerator<_> with
-                    member __.Current = inner.Current
-                    member __.DisposeAsync() = (reader :> IAsyncDisposable).DisposeAsync()
-                    member __.MoveNextAsync() = inner.MoveNextAsync() } }
+                let up = upstream.GetAsyncEnumerator(cancel)
+                let children = Dictionary<'b, ChannelWriter<'a>>()
+                let inp, out = if maxActiveGroups = 0 then Channel.unboundedSpsc () else Channel.boundedSpsc maxActiveGroups
+                let complete (e: exn) =
+                    inp.TryComplete e |> ignore
+                    for kv in children do
+                        kv.Value.TryComplete e |> ignore
+                    up.DisposeAsync()
+                let mutable disposed = false
+                let receiver = Task.runCancellable cancel <| fun () -> task {
+                    try
+                        let mutable cont = not disposed
+                        while not cancel.IsCancellationRequested && not disposed && cont do
+                            let! hasNext = up.MoveNextAsync()
+                            if hasNext then
+                                let key = fn up.Current
+                                match children.TryGetValue(key) with
+                                | true, writer ->
+                                    do! writer.WriteAsync(up.Current, cancel)
+                                | false, _     ->
+                                    let w, r = if capacityPerGroup = 0 then Channel.unboundedSpsc () else Channel.boundedSpsc capacityPerGroup
+                                    children.Add(key, w)
+                                    do! w.WriteAsync(up.Current, cancel)
+                                    do! inp.WriteAsync((key, r.ReadAllAsync()), cancel)
+                            else cont <- false
+                        printfn "groupBy done"
+                        do! complete null
+                    with e ->
+                        do! complete e                
+                }
+                let mutable current = Unchecked.defaultof<_>
+                { new IAsyncEnumerator<('b * AsyncSeq<'a>)> with
+                    member __.Current = current
+                    member __.DisposeAsync() =
+                        disposed <- true
+                        ValueTask(receiver :> Task)
+                    member __.MoveNextAsync() =
+                        if out.TryRead(&current)
+                        then ValueTask<_> true
+                        else Unsafe.uvtask {
+                            let! hasNext = out.WaitToReadAsync()
+                            if hasNext && out.TryRead(&current)
+                            then return true
+                            else return false                                
+                        }
+                }
+        }
         
     /// Returns an asynchronous sequence of elements, that will immediately fail once consumer will try to pull
     /// first element. 
