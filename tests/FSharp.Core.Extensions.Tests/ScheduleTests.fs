@@ -33,7 +33,7 @@ let private eval (x: ValueTask<'a>) = x.GetAwaiter().GetResult()
 
 [<Tests>]
 let tests =
-    testList "Schedule" [
+    testSequenced <| testList "Schedule" [
         testCase "now should execute immediately" <| fun _ ->
             let mutable s = Schedule.now
             // run this in loop to ensure that the behavior doesn't change over multiple calls

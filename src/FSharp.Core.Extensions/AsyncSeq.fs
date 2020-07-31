@@ -257,41 +257,56 @@ module AsyncSeq =
         
     [<Sealed>]
     type private MapParallelEnumerator<'a, 'b>(parallelism: int, e: IAsyncEnumerator<'a>, cancel:CancellationToken, map: 'a -> ValueTask<'b>) =
-        let input = Channel.CreateBounded<'a>(parallelism)
-        let output = Channel.CreateBounded<'b>(parallelism)
+        let (iwriter, ireader) = Channel.boundedSpmc<'a>(parallelism)
+        let (owriter, oreader) = Channel.boundedMpmc<'b>(parallelism)
         let mutable current = Unchecked.defaultof<_>
         let mutable remaining = parallelism
-        let workers = Array.init parallelism (fun _ -> unitTask {
-            while not (cancel.IsCancellationRequested || input.Reader.Completion.IsCompleted) do
-                let! next = input.Reader.ReadAsync(cancel)
-                let! o = map next
-                do! output.Writer.WriteAsync(o, cancel)
-            Interlocked.Decrement(&remaining) |> ignore
+        let workers = Array.init parallelism (fun i -> unitTask {
+            try
+                let mutable cont = not cancel.IsCancellationRequested
+                while cont do
+                    let ok, next = ireader.TryRead()
+                    if ok then
+                        let! o = map next
+                        let ok = owriter.TryWrite(o)
+                        if not ok then
+                            let! canWrite = owriter.WaitToWriteAsync(cancel)
+                            cont <- not cancel.IsCancellationRequested && canWrite
+                    else
+                        let! canRead = ireader.WaitToReadAsync(cancel)
+                        cont <- not cancel.IsCancellationRequested && canRead
+                if Interlocked.Decrement(&remaining) = 0 then
+                    owriter.TryComplete() |> ignore
+            with err ->
+                owriter.TryComplete(err) |> ignore
         })
-        let reader = Task.Run(Func<Task>(fun () -> unitTask {
-            let mutable cont = not cancel.IsCancellationRequested 
-            while cont do
-                let! hasNext = e.MoveNextAsync()
-                if hasNext then
-                    do! input.Writer.WriteAsync(e.Current, cancel)
-                cont <- hasNext
-            input.Writer.TryComplete() |> ignore
+        let dispatcher = Task.Run(Func<Task>(fun () -> unitTask {
+            try
+                let mutable cont = not cancel.IsCancellationRequested 
+                while cont do
+                    let! hasNext = e.MoveNextAsync()
+                    if hasNext then
+                        do! iwriter.WriteAsync(e.Current, cancel)
+                    cont <- hasNext
+                iwriter.TryComplete() |> ignore
+            with err ->
+               iwriter.TryComplete(err) |> ignore 
         }))
         interface IAsyncEnumerator<'b> with
             member __.Current = current
             member __.DisposeAsync() = unitVtask {
-                try reader.Dispose() with _ -> ()
+                try dispatcher.Dispose() with _ -> ()
                 for worker in workers do
                     try worker.Dispose() with _ -> ()
-                input.Writer.TryComplete() |> ignore
+                iwriter.TryComplete() |> ignore
             }
             member __.MoveNextAsync() = vtask {
                 if cancel.IsCancellationRequested then return false
-                elif output.Reader.TryRead(&current) then return true
+                elif oreader.TryRead(&current) then return true
                 elif remaining = 0 then return false
                 else
-                    let! ready = output.Reader.WaitToReadAsync(cancel)
-                    if ready && output.Reader.TryRead(&current) then 
+                    let! ready = oreader.WaitToReadAsync(cancel)
+                    if ready && oreader.TryRead(&current) then 
                         return true
                     else                      
                         return false
@@ -1231,7 +1246,6 @@ module AsyncSeq =
                                     do! w.WriteAsync(up.Current, cancel)
                                     do! inp.WriteAsync((key, r.ReadAllAsync()), cancel)
                             else cont <- false
-                        printfn "groupBy done"
                         do! complete null
                     with e ->
                         do! complete e                

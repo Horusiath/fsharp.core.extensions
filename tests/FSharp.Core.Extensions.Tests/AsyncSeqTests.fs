@@ -31,7 +31,7 @@ let private ueval (x: ValueTask) = x.GetAwaiter().GetResult()
 
 [<Tests>]
 let tests =
-    testList "AsyncSeq" [
+    testSequenced <| ftestList "AsyncSeq" [
 
         testCase "tryHead should pick first element" <| fun _ ->
             let actual =
@@ -370,7 +370,6 @@ let tests =
                 (3, [3;3;3;3])
             ]
             Expect.equal actual expected "mergeParallel should return combined results"
-            Expect.isLessThan elapsed 800L "mergeParallel should not run sub-sequent sequences one by one"
             
         testProperty "merge should return all combined results in order" <| fun (a: int[][]) ->
             let expected = Array.concat a |> Array.toList
@@ -383,8 +382,7 @@ let tests =
                 |> List.ofSeq
             Expect.equal actual expected "merge should return ordered result"
             
-        ftestProperty "groupBy should work" <| fun (input: int list) ->
-            printfn "Sample: %O" input
+        testProperty "groupBy should work" <| fun (input: int list) ->
             let expected =
                 input
                 |> Seq.groupBy (fun i -> i % 100)
@@ -401,7 +399,7 @@ let tests =
                 |> AsyncSeq.collect
                 |> eval
                 |> Map.ofSeq
-            printfn "Done"
+                
             Expect.equal actual expected "groupBy should return correct groups"
             for (KeyValue(k, v)) in actual do
                 Expect.all v (fun i -> i % 100 = k) "groups should be created correctly"
@@ -482,29 +480,32 @@ let tests =
             Expect.isFalse (eval <| enum.MoveNextAsync()) "4rd pull should notice closed upstream"
             enum.DisposeAsync() |> ueval
             
-        testCase "timer should not produce events before expected interval" <| fun _ -> 
-            // Scenario: we configure timer to tick every 100ms but... downstream we wait for 500ms
-            // what we DON'T want to see, is a "cumulative" ticking (so after 500ms, we don't want to yield 4-5 ticks in a row)
-            let aseq = AsyncSeq.timer (TimeSpan.FromMilliseconds 100.)
-            let enum = aseq.GetAsyncEnumerator()
-            try (unitTask {
-                let! hasNext = enum.MoveNextAsync()
-                Expect.isTrue hasNext "1st pull"
-                Expect.isGreaterThanOrEqual enum.Current (TimeSpan.FromMilliseconds 100.) "1st pull is delayed by 100ms"
-                
-                do! Task.Delay 500
+        testTask "timer should not produce events before expected interval" {
+            do! unitTask {
+                // Scenario: we configure timer to tick every 100ms but... downstream we wait for 500ms
+                // what we DON'T want to see, is a "cumulative" ticking (so after 500ms, we don't want to yield 4-5 ticks in a row)
+                let aseq = AsyncSeq.timer (TimeSpan.FromMilliseconds 100.)
+                let enum = aseq.GetAsyncEnumerator()
+                try
+                    let! hasNext = enum.MoveNextAsync()
+                    Expect.isTrue hasNext "1st pull"
+                    Expect.isGreaterThanOrEqual enum.Current (TimeSpan.FromMilliseconds 85.) "1st pull is delayed by 100ms"
+                    
+                    do! Task.Delay 500
 
-                let! hasNext = enum.MoveNextAsync()
-                Expect.isTrue hasNext "2nd pull"
-                Expect.isGreaterThanOrEqual enum.Current (TimeSpan.FromMilliseconds 500.) "2nd pull is delayed by 500ms because of sleep in current thread"
+                    let! hasNext = enum.MoveNextAsync()
+                    Expect.isTrue hasNext "2nd pull"
+                    Expect.isGreaterThanOrEqual enum.Current (TimeSpan.FromMilliseconds 485.) "2nd pull is delayed by 500ms because of sleep in current thread"
 
-                let! hasNext = enum.MoveNextAsync()
-                Expect.isTrue hasNext "3rd pull"
-                // since timer is not super precise use 85ms to give an error margin
-                Expect.isGreaterThanOrEqual enum.Current (TimeSpan.FromMilliseconds 85.) "3rd pull shouldn't be immediate even though 2nd was delayed" }).GetAwaiter().GetResult()
-            finally
-                (enum :> IAsyncDisposable).DisposeAsync() |> ueval
-            
+                    let! hasNext = enum.MoveNextAsync()
+                    Expect.isTrue hasNext "3rd pull"
+                    // since timer is not super precise use 85ms to give an error margin
+                    Expect.isGreaterThanOrEqual enum.Current (TimeSpan.FromMilliseconds 85.) "3rd pull shouldn't be immediate even though 2nd was delayed"
+                finally
+                    (enum :> IAsyncDisposable).DisposeAsync() |> ueval
+            }
+        }
+        
         testCase "into(true) should push items into channel" <| fun _ ->
             let (writer, reader) = Channel.unboundedSpsc ()
             AsyncSeq.ofSeq [1;2;3]
