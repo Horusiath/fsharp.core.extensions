@@ -43,9 +43,7 @@ type private Callback(builder: AsyncValueTaskMethodBuilder, task: ValueTask, con
                 else
                     continuation.Invoke(task, state)
             with e ->
-                printfn "ETF: %O" e 
-                // As we might be running inline swallow any exception, continuation can deal with it.
-                ()
+                continuation.Invoke(ValueTask(Task.FromException(e)), state)
 
     static member Start(task: ValueTask, state: obj, continuation: Action<ValueTask, obj>) =
         let mutable builder = AsyncValueTaskMethodBuilder()

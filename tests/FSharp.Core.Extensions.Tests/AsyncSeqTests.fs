@@ -343,8 +343,6 @@ let tests =
                 AsyncSeq.ofSeq [2;2;2] |> AsyncSeq.delay (fun _ -> TimeSpan.FromMilliseconds 100.)
                 AsyncSeq.ofSeq [3;3;3;3] |> AsyncSeq.delay (fun _ -> TimeSpan.FromMilliseconds 100.)
             |]
-            let sw = System.Diagnostics.Stopwatch()
-            sw.Start()
             let actual = 
                 AsyncSeq.mergeParallel seqs
                 |> AsyncSeq.collect
@@ -352,8 +350,6 @@ let tests =
                 |> List.ofSeq
                 |> List.groupBy id
                 |> Map.ofList
-            let elapsed = sw.ElapsedMilliseconds
-            sw.Stop()
             let expected = Map.ofList [
                 (1, [1;1])
                 (2, [2;2;2])
