@@ -147,7 +147,6 @@ type internal VecBuilder<'a> =
                 this.root <- root'
                 this.shift <- shift'
     
-
 and [<IsByRefLike;Struct>] VecEnumerator<'a>(vector: Vec<'a>) =
     [<DefaultValue(false)>]val mutable private array: 'a[]
     [<DefaultValue(false)>]val mutable private index: int
@@ -174,10 +173,11 @@ and [<IsByRefLike;Struct>] VecEnumerator<'a>(vector: Vec<'a>) =
             this.index <- 0
         member __.Dispose() = ()
         member this.MoveNext(): bool = this.MoveNext()
-        
-and [<Sealed>] VecReadOnlySequenceSegment<'a>(parent: Vec<'a>, chunk: 'a[]) =
-    inherit ReadOnlySequenceSegment<'a>()
-        
+
+/// Vec is an immutable vector implementation, optimized for fast append/pop operations,
+/// as well as fast traverse access and random access. Internal structure uses an immutable
+/// tree of chunks, so that when an item is pushed/popped, we don't need to copy an entire
+/// vector. 
 and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail: 'a[]) =
             
     static let emptyNode: VecNode<'a> = Branch (Array.zeroCreate VecConst.capacity)
@@ -222,9 +222,11 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
             result.[subidx] <- doAssoc (level-5) children.[subidx] i value &old
             Branch result
     
+    /// Returns an empty vector.
     [<MethodImpl(MethodImplOptions.AggressiveInlining)>]
     static member Empty(): Vec<'a> = empty
     
+    /// Creates a new vector from array of items.
     static member From(items: 'a[]): Vec<'a> = 
         let count = Array.length items
         if count = 0 then empty
@@ -235,19 +237,20 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
         else
             Vec<_>(count, VecConst.off, emptyNode, Array.copy items)
             
+    /// Maps contents of a vector, creating new vector in a result.
     member this.Map(fn: 'a -> 'b): Vec<'b> =
+        //TODO: special case for `id` function?
         if count = 0 then Vec<'b>.Empty()
         else
             let root' = root.Map fn
             let tail' = tail |> Array.map fn
             Vec<'b>(count, shift, root', tail')
-            
-    member this.AsReadOnlySequence(): ReadOnlySequence<'a> =
-        let first = this.FindArrayForIndex(0)
-        let last = this.FindArrayForIndex(count - 1)
-        ReadOnlySequence<'a>(VecReadOnlySequenceSegment(this, first), 0, VecReadOnlySequenceSegment(this, last), count)
-            
+                        
+    /// Returns a number of items stored inside of current vector.
     member __.Count: int = count
+    
+    /// Gets an enumerable ref-like structure, that allows to iterate over current vector.
+    /// It's optimized to be used together with for loops.
     member this.GetEnumerator(): VecEnumerator<_> = new VecEnumerator<_>(this)
     
     member internal __.FindArrayForIndex(index: int): 'a[] =
@@ -258,6 +261,7 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
             while level > 0 do
                 match node with
                 | Branch array ->
+                    // TODO: Unsafe.Add to avoid bound checking
                     node <- array.[(index >>> level) &&& VecConst.mask]
                 | _ -> ()
                 level <- level - VecConst.off
@@ -265,6 +269,7 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
             | Leaf array -> array
             | _ -> failwithf "Expected leaf for index %i, but got %A (count: %i, shift: %i)" index node count shift
     
+    /// Adds new `value` at the end of current vector, returning new vector in the result.
     member __.Add(value) =
         if count - VecConst.tailoff count < VecConst.capacity
         then
@@ -289,6 +294,8 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
                     VecConst.appendTail count shift root tailNode
             Vec<_>(count + 1, shift', root', [| value |])
            
+    /// Replaces a value at given `index`, producing new vector with updated value in the result.
+    /// Value stored previously under that index is returned as outref parameter. 
     member this.Replace(index: int, value: 'a, old: 'a outref): Vec<'a> =
         if index < 0 || index >= count then raise (IndexOutOfRangeException (sprintf "Tried to insert value at index %i in vector of size %i" index count))
         elif index >= VecConst.tailoff count then
@@ -300,7 +307,8 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
         else
             let root' = doAssoc shift root index value &old
             Vec<_>(count, shift, root', tail)
-            
+          
+    /// Returns a value stored under given `index`  
     member this.ElementAt(index: int): 'a =
         if index >= 0 && index < count then
             let n = this.FindArrayForIndex index
@@ -309,6 +317,9 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
         
     member inline this.Item with get index = this.ElementAt index
 
+    /// Returns index of first occurence of given `value` inside of current vector.
+    /// Value is searched for in `O(n)` complexity, starting from the beginning of
+    /// a vector. Comparison is made using equality method defined on element type.
     member this.IndexOf(value: 'a): int =
         let eq = EqualityComparer<'a>.Default
         let mutable e = new VecEnumerator<'a>(this)
@@ -320,6 +331,9 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
             i <- i + 1
         found            
 
+    /// Copies contents of current vector into given `array`. Values inserted into an
+    /// array starts at given array's index. Array must be large enough to contain all
+    /// of the vectors elements, otherwise an exception will be thrown.
     member this.CopyTo(array: 'a[], arrayIndex: int) =
         let mutable offset = 0
         let mutable i = arrayIndex
@@ -329,6 +343,9 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
             offset <- offset + VecConst.capacity
             i <- i + VecConst.capacity
             
+    /// Removes the last value from a current vector, returning an updated vector with
+    /// that value removed. Value is assinged to given out ref parameter. If current
+    /// vector is empty, this method will raise an `InvalidOperationException`.
     member this.Pop(removed: 'a outref): Vec<'a> =
         match count with
         | 0 -> raise (InvalidOperationException "Cannot pop an empty vector")
@@ -801,7 +818,3 @@ module Vec =
     /// in reverse direction (starting from end).
     [<CompiledName("GetReverseEnumerator")>]       
     let inline rev (v: Vec<'a>) = Reverser(v)
-    
-    /// Returns a read-only sequence, which contains efficient access to a chunked contents of given vector.
-    [<CompiledName("ToReadOnlySequence")>]
-    let inline toReadOnlySeq (v: Vec<'a>): ReadOnlySequence<'a> = v.AsReadOnlySequence()

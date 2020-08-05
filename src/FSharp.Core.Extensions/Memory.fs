@@ -34,6 +34,7 @@ module Span =
         let p = NativePtr.stackalloc<'a> length |> NativePtr.toVoidPtr
         Span<'a>(p, length)
         
+    /// Returns a Span build from a given `ArraySegment` and its defined boundaries.
     let inline ofSegment (s: ArraySegment<'a>) = Span(s.Array, s.Offset, s.Count)
         
     /// Wraps provided array into a Span.
@@ -60,19 +61,24 @@ module Span =
     /// Checks if current span is `empty`.
     let inline isEmpty (span: Span<_>) = span.IsEmpty
     
-    let inline copyTo (dst: Span<_>) (span: Span<_>) = span.CopyTo(dst)
+    /// Copies content of `source` span into `destination`. If copy is not possible (eg. because
+    /// `destination` size is too small), an exception will be thrown.
+    let inline copyTo (destination: Span<_>) (source: Span<_>) = source.CopyTo(destination)
     
-    let inline tryCopyTo (dst: Span<_>) (span: Span<_>) = span.TryCopyTo(dst)
+    /// Copies content of `source` span into `destination`. If copy is not possible (eg. because
+    /// `destination` size is too small), an operation will abort and `false` will be returned.
+    let inline tryCopyTo (destination: Span<_>) (source: Span<_>) = source.TryCopyTo(destination)
     
 [<RequireQualifiedAccess>]
 module ReadOnlySpan =
     
-    /// Returns an empty span.
+    /// Returns an empty read-only span.
     let empty<'a> : ReadOnlySpan<'a> = ReadOnlySpan<'a>.Empty
     
+    /// Returns a ReadOnlySpan build from a given `ArraySegment` and its defined boundaries.
     let inline ofSegment (s: ArraySegment<'a>) = ReadOnlySpan(s.Array, s.Offset, s.Count)
 
-    /// Wraps provided array into a Span.
+    /// Wraps provided array into a ReadOnlySpan.
     let inline ofArray (a: 'a[]): ReadOnlySpan<'a> = ReadOnlySpan(a)
     
     /// Creates a Span out of (*void) pointer with a given byte length.
@@ -96,8 +102,12 @@ module ReadOnlySpan =
     /// Checks if current span is `empty`.
     let inline isEmpty (span: ReadOnlySpan<_>) = span.IsEmpty
     
+    /// Copies content of `source` span into `destination`. If copy is not possible (eg. because
+    /// `destination` size is too small), an exception will be thrown.
     let inline copyTo (dst: Span<_>) (span: ReadOnlySpan<_>) = span.CopyTo(dst)
     
+    /// Copies content of `source` span into `destination`. If copy is not possible (eg. because
+    /// `destination` size is too small), an operation will abort and `false` will be returned.
     let inline tryCopyTo (dst: Span<_>) (span: ReadOnlySpan<_>) = span.TryCopyTo(dst)
     
     /// Checks, if contents of both readonly spans are the same.
@@ -115,12 +125,16 @@ module Memory =
     /// Rents a Memory segment from a shared memory pool. Memory pool will respect
     /// lower bound, therefore always returning memory having at least `minCapacity`.
     ///
-    /// However upper bound depends on the pool implementation, so eg. `Memory.rent(12)`
-    /// can possibly return a Memory segment of 4096 bytes.
+    /// Memory buffers returned are grouped in buckets, at the moment of .NET v3.1 the lowest
+    /// one being 4KiB, up to 2MiB. This means that for any value under 4KiB, a 4KiB buffer
+    /// will be returned. For `minCapacity` over 2MiB, a pooling is implicitly ignored,
+    /// so any rent/disposal cycle will allocate/return memory straight by using GC. 
     ///
-    /// Returned object is a disposable resource. 
+    /// Returned object is a disposable resource. When disposed it will return memory buffer
+    /// back to the pool. 
     let inline rent(minCapacity: int): IMemoryOwner<_> = MemoryPool.Shared.Rent(minCapacity)
     
+    /// Returns a Memory build from a given `ArraySegment` and its defined boundaries.
     let inline ofSegment (s: ArraySegment<'a>) = Memory(s.Array, s.Offset, s.Count)
     
     /// Wraps provided array into a memory.

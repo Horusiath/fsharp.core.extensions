@@ -26,7 +26,7 @@ open System.Threading.Tasks
 
 module Channel =
     
-    /// Returns decomposed writer/reader pair components of n-capacity bounded MPSC
+    /// Returns decomposed writer/reader pair components of `n`-capacity bounded MPSC
     /// (multi-producer/single-consumer) channel.
     let inline boundedMpsc<'a> (n: int) : (ChannelWriter<'a> * ChannelReader<'a>) =
         let ch = Channel.CreateBounded(BoundedChannelOptions(n, SingleWriter=false, SingleReader=true))
@@ -39,7 +39,7 @@ module Channel =
         (ch.Writer, ch.Reader)
        
     
-    /// Returns decomposed writer/reader pair components of n-capacity bounded MPMC
+    /// Returns decomposed writer/reader pair components of `n`-capacity bounded MPMC
     /// (multi-producer/multi-consumer) channel.
     let inline boundedMpmc<'a> (n: int) : (ChannelWriter<'a> * ChannelReader<'a>) =
         let ch = Channel.CreateBounded(BoundedChannelOptions(n, SingleWriter=false, SingleReader=false))
@@ -51,7 +51,7 @@ module Channel =
         let ch = Channel.CreateUnbounded(UnboundedChannelOptions(SingleWriter=false, SingleReader=false))
         (ch.Writer, ch.Reader)
         
-    /// Returns decomposed writer/reader pair components of n-capacity bounded SPSC
+    /// Returns decomposed writer/reader pair components of `n`-capacity bounded SPSC
     /// (single-producer/single-consumer) channel.
     let inline boundedSpsc<'a> (n: int) : (ChannelWriter<'a> * ChannelReader<'a>) =
         let ch = Channel.CreateBounded(BoundedChannelOptions(n, SingleWriter=true, SingleReader=true))
@@ -63,7 +63,7 @@ module Channel =
         let ch = Channel.CreateUnbounded(UnboundedChannelOptions(SingleWriter=true, SingleReader=true))
         (ch.Writer, ch.Reader)
         
-    /// Returns decomposed writer/reader pair components of n-capacity bounded SPMC
+    /// Returns decomposed writer/reader pair components of `n`-capacity bounded SPMC
     /// (single-producer/multi-consumer) channel.
     let inline boundedSpmc<'a> (n: int) : (ChannelWriter<'a> * ChannelReader<'a>) =
         let ch = Channel.CreateBounded(BoundedChannelOptions(n, SingleWriter=true, SingleReader=false))
@@ -75,8 +75,9 @@ module Channel =
         let ch = Channel.CreateUnbounded(UnboundedChannelOptions(SingleWriter=true, SingleReader=false))
         (ch.Writer, ch.Reader)
         
-    /// Tries to read as much elements as possible from a given reader to fill provided span
-    /// without blocking.
+    /// Tries to read as much elements as possible from a given channel `reader` to fill provided `span`
+    /// without blocking. It won't try to read more elements than provided `span`'s length.
+    /// Returns a number of elements read from the channel.
     let readTo (span: Span<'a>) (reader: ChannelReader<'a>) : int =
         let mutable i = 0
         let mutable item = Unchecked.defaultof<_>
@@ -100,11 +101,12 @@ module Channel =
         if ok then return value
         else return! awaitForValue readers
     }
-    
-    /// Listens or multiple channels, returning value from the one which completed first.
-    /// Order in which channels where provided will be assumed priority order in case
-    /// when multiple channels have produced their values at the same time. If any of the
-    /// channels will be closed while waiting or any exception will be produced, entire
+        
+    /// Listens for multiple channels, returning value from the one which completed first.
+    /// In case when multiple channels have their values ready, it will start reading from
+    /// the first reader onwards - therefore multiple calls to this function may potentially
+    /// lead to starvation of channels at the end of the `reader` array.
+    /// If any of the channels will be closed while waiting or any exception will be produced, entire
     /// select will fail.
     let select (readers: ChannelReader<'a>[]) : ValueTask<'a> =
         // 1st pass, check in any reader has it's value already prepared

@@ -134,4 +134,5 @@ let tests =
             let actual = Vec.append v s |> Vec.toArray
             let expected = Array.init 100 (fun i -> i+10)
             Expect.equal actual expected "Vec.append should be able to append many elements"
+            
     ]

@@ -102,7 +102,7 @@ type UnboundedActor<'msg>() =
         this.WriteAsync(message, cancel |> Option.defaultValue Unchecked.defaultof<_>)
     
     /// Disposes current actor. If `interrupt` flag was set, it will dispose immediately, discarding all pending
-    /// messages. Otherwise it will just close writer channel (so noone can send messages to it), but complete only
+    /// messages. Otherwise it will just close writer channel (so no one can send messages to it), but complete only
     /// after all pending messages has been processed.
     member this.DisposeAsync (interrupt: bool) : ValueTask =
          if interrupt then

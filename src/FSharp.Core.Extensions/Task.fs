@@ -57,10 +57,9 @@ module Task =
             return Error e
     }
     
+    /// Converts given ValueTask into a Task.
     let inline ofValueTask (vt: ValueTask<'a>) : Task<'a> = vt.AsTask()
-    
-    let inline wait (task: Task<'a>) = task.GetAwaiter().GetResult()
-    
+        
     /// Runs two tasks in parallel, returning a result of the one which completed first
     /// while disposing the other.
     let race (left: Task<'a>) (right: Task<'b>) : Task<Choice<'a,'b>> = task {
@@ -73,8 +72,10 @@ module Task =
             return Choice2Of2 right.Result
     }
         
+    /// Runs given function on top of .NET global thread poll, returning task representing that operation.
     let inline run (f: unit -> Task<'a>) : Task<'a> = Task.Run<'a>(Func<_>(f))
     
+    /// Runs given function on top of .NET global thread poll, returning task representing that operation.
     let inline runCancellable (c: CancellationToken) (f: unit -> Task<'a>) : Task<'a> = Task.Run<'a>(Func<_>(f), c)
 
 type Promise<'a> = TaskCompletionSource<'a>

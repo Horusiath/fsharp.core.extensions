@@ -230,8 +230,7 @@ let tests =
                 |> AsyncSeq.collect
                 |> Task.ofValueTask
                 |> Task.secure
-                |> Task.wait
-            Expect.isError actual "cancellation should work on the underlying data type"
+            Expect.isError (actual.GetAwaiter().GetResult()) "cancellation should work on the underlying data type"
             
         testCase "grouped should chop incoming element into even batches" <| fun _ ->
             let actual =

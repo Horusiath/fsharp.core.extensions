@@ -19,10 +19,10 @@ module FSharp.Core.Operators
 open System
 open System.Collections.Generic
 
-/// An operator over a implicit cast operation.
+/// An operator over an implicit cast operation betwen two types.
 let inline (!%) (x:^a) : ^b = ((^a or ^b) : (static member op_Implicit : ^a -> ^b) x)  
 
-/// Creates a key value pair out of provided `key` and `value` arguments.
+/// Creates a `KeyValuePair<k,v>` out of provided `key` and `value` arguments.
 let inline (=>) (key: 'k) (value: 'v): KeyValuePair<'k,'v> = KeyValuePair(key, value)
 
 type System.TimeSpan with
@@ -39,12 +39,17 @@ type System.TimeSpan with
 module Map =
     
     /// Inserts or updates value under provided `key` (if it existed before) using function `fn`.
+    /// Upsert function receives `Some` containing existing value, if such has been found,
+    /// or `None` otherwise.
     let upsert (key: 'k) (fn: 'v option -> 'v) (map: Map<'k,'v>) : Map<'k,'v> =
         let nval = map |> Map.tryFind key |> fn
         Map.add key nval map
         
     /// Builds a union of two maps. In case when both maps have entries with the same given key,
-    /// function `fn` will be used to reconcile the result value in output map.
+    /// function `fn` will be used to reconcile the result value in output map. Function arguments:
+    /// 1. Key of reconciled entires matched between both maps `a` and `b`.
+    /// 2. Value of entry in first map `a`.
+    /// 3. Value of entry in second map `b`.
     let union (fn: 'k -> 'v -> 'v -> 'v) (a: Map<'k,'v>) (b: Map<'k,'v>): Map<'k,'v> =
         let mutable m = a
         for e in b do
@@ -54,7 +59,10 @@ module Map =
             m <- Map.add key (if ok then fn key aval bval else bval) m
         m
         
-    /// Builds an intersection of two maps using function `fn` to produce an output value
+    /// Builds an intersection of two maps using function `fn` to produce an output value. Function arguments:
+    /// 1. Key of reconciled entires matched between both maps `a` and `b`.
+    /// 2. Value of entry in first map `a`.
+    /// 3. Value of entry in second map `b`.
     let intersect (fn: 'k -> 'v -> 'v -> 'v2) (a: Map<'k,'v>) (b: Map<'k,'v>): Map<'k,'v2> =
         let mutable m = Map.empty
         for e in b do
