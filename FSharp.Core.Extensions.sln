@@ -6,6 +6,17 @@ Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "FSharp.Core.Extensions.Test
 EndProject
 Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "Benchmarks", "tests\Benchmarks\Benchmarks.fsproj", "{A5CF9299-5AD5-441A-90AF-46F81DB4E48C}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "build", "build", "{F7724E3F-37DC-4104-9238-FDF71C4DF84D}"
+ProjectSection(SolutionItems) = preProject
+	global.json = global.json
+EndProjectSection
+EndProject
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "Clusterpack", "Clusterpack\Clusterpack.fsproj", "{5444A20A-F0C1-48F3-8780-F68B6B7D9DFF}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "clusterpack", "clusterpack", "{8F42F091-850C-4AF3-911E-1B5DDDCF3967}"
+EndProject
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "ClusterpackDemo", "Clusterpack\ClusterpackDemo\ClusterpackDemo.fsproj", "{DA899F1A-C18F-475E-87B6-4FF17885E200}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -24,5 +35,17 @@ Global
 		{A5CF9299-5AD5-441A-90AF-46F81DB4E48C}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A5CF9299-5AD5-441A-90AF-46F81DB4E48C}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{A5CF9299-5AD5-441A-90AF-46F81DB4E48C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5444A20A-F0C1-48F3-8780-F68B6B7D9DFF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5444A20A-F0C1-48F3-8780-F68B6B7D9DFF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5444A20A-F0C1-48F3-8780-F68B6B7D9DFF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5444A20A-F0C1-48F3-8780-F68B6B7D9DFF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{DA899F1A-C18F-475E-87B6-4FF17885E200}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DA899F1A-C18F-475E-87B6-4FF17885E200}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DA899F1A-C18F-475E-87B6-4FF17885E200}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DA899F1A-C18F-475E-87B6-4FF17885E200}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{5444A20A-F0C1-48F3-8780-F68B6B7D9DFF} = {8F42F091-850C-4AF3-911E-1B5DDDCF3967}
+		{DA899F1A-C18F-475E-87B6-4FF17885E200} = {8F42F091-850C-4AF3-911E-1B5DDDCF3967}
 	EndGlobalSection
 EndGlobal

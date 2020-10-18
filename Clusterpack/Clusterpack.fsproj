@@ -1,0 +1,23 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>netcoreapp3.1</TargetFramework>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Compile Include="Prolog.fs" />
+        <Compile Include="Node.fs" />
+        <Compile Include="GrpcTransport.fs" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\src\FSharp.Core.Extensions\FSharp.Core.Extensions.fsproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <PackageReference Include="Grpc.Core" Version="2.32.0" />
+      <PackageReference Include="Hyperion" Version="0.9.16" />
+      <PackageReference Include="System.IO.Pipelines" Version="4.7.3" />
+    </ItemGroup>
+
+</Project>
