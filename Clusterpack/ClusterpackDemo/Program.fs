@@ -17,7 +17,7 @@ let start nodeId endpoint =
     let transport = new GrpcTransport(nodeId, endpoint)
     new Node(transport)
     
-let run (cancel: CancellationToken) = unitVtask {
+let run (cancel: CancellationToken) = unitVtask {    
     use a = start 1u "127.0.0.1:10001"
     use b = start 2u "127.0.0.1:10002"
     

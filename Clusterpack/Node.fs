@@ -18,14 +18,12 @@ type internal EndpointWriter(connection: Connection) =
     inherit BoundedActor<EndpointMessage>(128)
     override this.Receive(msg) = unitVtask {
         do! connection.Send(msg, this.CancellationToken)
-        printfn "sent %O" msg
     }
 
 type internal EndpointReader(connection: Connection, locals: ConcurrentDictionary<ChannelId, Addressable>) =
     let cancel = new CancellationTokenSource()
     let receive (cancel: CancellationToken) = unitVtask {
         let! envelope = connection.ReceiveNext(cancel)
-        printfn "received %O" envelope
         match envelope  with
         | Envelope(struct(_, channelId), msg) ->
             match locals.TryGetValue(channelId) with

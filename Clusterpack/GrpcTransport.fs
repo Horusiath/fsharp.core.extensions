@@ -13,7 +13,7 @@ open Grpc.Core
 open FSharp.Core
 
 [<Sealed>]
-type GrpcTransport(nodeId: NodeId, endpoint: Endpoint, trace: TextWriter) =
+type GrpcTransport(nodeId: NodeId, endpoint: Endpoint) =
     static let toServerPort (endpoint: Endpoint) =
         let [|host;port|] = endpoint.Split ':'
         ServerPort(host, int port, ServerCredentials.Insecure)
@@ -43,33 +43,32 @@ type GrpcTransport(nodeId: NodeId, endpoint: Endpoint, trace: TextWriter) =
     let communicationChannel (incoming: Manifest) (responseStream: IServerStreamWriter<EndpointMessage>) (context: ServerCallContext) = unitTask {
         match pending.TryRemove(incoming.Endpoint) with
         | true, (conn, promise) ->
-            trace.WriteLine(sprintf "'%s' received connection back from '%s'" endpoint incoming.Endpoint)
             conn.Start(incoming, responseStream)
             promise.SetResult(conn)
+            do! conn.Completed
         | false, _ ->
-            trace.WriteLine(sprintf "'%s' received connection from '%s'" endpoint incoming.Endpoint)
             let sp = toServerPort incoming.Endpoint
             let channel = new Grpc.Core.Channel(sp.Host, sp.Port, ChannelCredentials.Insecure)
             do! channel.ConnectAsync()
             let invoker = DefaultCallInvoker(channel)
             let call = invoker.AsyncServerStreamingCall(method, endpoint, callOptions, manifest)
-            let connection = new GrpcConnection(channel, call)
-            connection.Start(incoming, responseStream)
-            do! acceptedWriter.WriteAsync(connection, context.CancellationToken)
+            let conn = new GrpcConnection(channel, call)
+            conn.Start(incoming, responseStream)
+            do! acceptedWriter.WriteAsync(conn, context.CancellationToken)
+            do! conn.Completed
     }
     
     
     let server =
-        let builder = ServerServiceDefinition.CreateBuilder().AddMethod(method, ServerStreamingServerMethod(communicationChannel))
+        let builder = ServerServiceDefinition.CreateBuilder()
+                          .AddMethod(method, ServerStreamingServerMethod(communicationChannel))
         let server = Server()
         server.Ports.Add(toServerPort endpoint) |> ignore
         server.Services.Add(builder.Build())
         server.Start()
-        trace.WriteLine(sprintf "'%s' is up" endpoint)
         server
         
     let connect = Func<Endpoint, (GrpcConnection * TaskCompletionSource<Connection>)>(fun target ->
-        trace.WriteLine(sprintf "'%s' connecting to '%s'" endpoint target)
         let sp = toServerPort target
         let promise = TaskCompletionSource<Connection>()
         let channel = new Grpc.Core.Channel(sp.Host, sp.Port, ChannelCredentials.Insecure)
@@ -79,9 +78,6 @@ type GrpcTransport(nodeId: NodeId, endpoint: Endpoint, trace: TextWriter) =
         let connection = new GrpcConnection(channel, call)
         (connection, promise)
     )
-        
-    new (nodeId: NodeId, endpoint: Endpoint) =
-        GrpcTransport(nodeId, endpoint, Console.Out)
         
     interface Transport with
         member this.DisposeAsync() = ValueTask(server.ShutdownAsync())
@@ -94,14 +90,17 @@ type GrpcTransport(nodeId: NodeId, endpoint: Endpoint, trace: TextWriter) =
         member this.Accepted: IAsyncEnumerator<Connection> = accepted
 
 and [<Sealed>] GrpcConnection(channel: Grpc.Core.Channel, response: AsyncServerStreamingCall<EndpointMessage>) =
+    let completed = TaskCompletionSource<unit>()
     [<DefaultValue>] val mutable manifest: Manifest
     [<DefaultValue>] val mutable request: IServerStreamWriter<EndpointMessage>
     member this.Start(manifest: Manifest, req: IServerStreamWriter<EndpointMessage>) =
         this.manifest <- manifest
         this.request <- req
+    member this.Completed = completed.Task
     interface Connection with
         member this.DisposeAsync() = unitVtask {
-            do! channel.ShutdownAsync()
+            if completed.TrySetResult () then
+                do! channel.ShutdownAsync()
         }
         member this.Manifest = this.manifest
         member this.Send(msg, cancel) = unitVtask {
