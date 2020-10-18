@@ -36,7 +36,7 @@ type GrpcTransport(nodeId: NodeId, endpoint: Endpoint) =
         
     let pending = ConcurrentDictionary<Endpoint, (GrpcConnection * TaskCompletionSource<Connection>)>()
     let (acceptedWriter, acceptedReader) = Channel.boundedMpsc<Connection> 16
-    let accepted = acceptedReader.ReadAllAsync().GetAsyncEnumerator()
+    let accepted = acceptedReader.ReadAllAsync()
     
     let manifest = { NodeId = nodeId; Endpoint = endpoint }
         
@@ -87,10 +87,16 @@ type GrpcTransport(nodeId: NodeId, endpoint: Endpoint) =
             use reg = cancellationToken.Register(Action(fun () -> promise.SetCanceled()))
             return! promise.Task           
         }
-        member this.Accepted: IAsyncEnumerator<Connection> = accepted
+        member this.Accepted: IAsyncEnumerable<Connection> = accepted
 
 and [<Sealed>] GrpcConnection(channel: Grpc.Core.Channel, response: AsyncServerStreamingCall<EndpointMessage>) =
     let completed = TaskCompletionSource<unit>()
+    let getEnumerator cancel =
+        { new IAsyncEnumerator<EndpointMessage> with
+            member this.MoveNextAsync() = ValueTask<bool>(response.ResponseStream.MoveNext(cancel))
+            member this.Current = response.ResponseStream.Current
+            member this.DisposeAsync() = ValueTask() }
+    let incoming = { new IAsyncEnumerable<_> with member _.GetAsyncEnumerator(cancel) = getEnumerator cancel }
     [<DefaultValue>] val mutable manifest: Manifest
     [<DefaultValue>] val mutable request: IServerStreamWriter<EndpointMessage>
     member this.Start(manifest: Manifest, req: IServerStreamWriter<EndpointMessage>) =
@@ -103,10 +109,7 @@ and [<Sealed>] GrpcConnection(channel: Grpc.Core.Channel, response: AsyncServerS
                 do! channel.ShutdownAsync()
         }
         member this.Manifest = this.manifest
+        member this.Incoming = incoming
         member this.Send(msg, cancel) = unitVtask {
             do! this.request.WriteAsync(msg)
-        }
-        member this.ReceiveNext(cancel) = vtask {
-            let hasValues = response.ResponseStream.MoveNext(cancel).GetAwaiter().GetResult()
-            return if hasValues then response.ResponseStream.Current else raise (ConnectionClosedException(this.manifest.Endpoint))
         }

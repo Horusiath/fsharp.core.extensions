@@ -21,26 +21,21 @@ type internal EndpointWriter(connection: Connection) =
     }
 
 type internal EndpointReader(connection: Connection, locals: ConcurrentDictionary<ChannelId, Addressable>) =
-    let cancel = new CancellationTokenSource()
-    let receive (cancel: CancellationToken) = unitVtask {
-        let! envelope = connection.ReceiveNext(cancel)
-        match envelope  with
-        | Envelope(struct(_, channelId), msg) ->
-            match locals.TryGetValue(channelId) with
-            | true, addressable ->
-                do! addressable.Pass(msg, cancel)
-            | false, _ ->
-                printfn "Couldn't send message (%O) to (%O) - channel cannot be found" msg channelId
-    }
-    let worker = Task.runCancellable cancel.Token (fun () -> task {
-        try
-            while not cancel.Token.IsCancellationRequested do
-                do! receive cancel.Token
-        with e ->
-            printfn "Failed to receive message from '%s': %O" connection.Manifest.Endpoint e
-    })
+    let cancellation = new CancellationTokenSource()
+    let receiving =
+        connection.Incoming
+        |> AsyncSeq.takeWhile (fun _ -> not cancellation.Token.IsCancellationRequested)
+        |> AsyncSeq.iter (fun envelope -> unitVtask {
+            match envelope  with
+            | Envelope(struct(_, channelId), msg) ->
+                match locals.TryGetValue(channelId) with
+                | true, addressable ->
+                    do! addressable.Pass(msg, CancellationToken.None)
+                | false, _ ->
+                    printfn "Couldn't send message (%O) to (%O) - channel cannot be found" msg channelId  
+        })
     member this.DisposeAsync() : ValueTask =
-        cancel.Cancel()
+        cancellation.Cancel()
         ValueTask()
     interface IAsyncDisposable with member this.DisposeAsync() = this.DisposeAsync()
         
@@ -53,8 +48,8 @@ type internal EndpointManager(connection: Connection, locals: ConcurrentDictiona
     member this.TryGet<'msg>(channelId: ChannelId) : Proxy<'msg> option =
         Some (downcast remotes.GetOrAdd(channelId, RemoteProxy<'msg>(struct(nodeId, channelId), writer)))
     member this.DisposeAsync() : ValueTask = unitVtask {
-        do! writer.DisposeAsync(true)
         do! reader.DisposeAsync()
+        do! writer.DisposeAsync(true)
         do! connection.DisposeAsync()
     }
     interface IAsyncDisposable with member this.DisposeAsync() = this.DisposeAsync()
@@ -65,38 +60,28 @@ type Node(transport: Transport) as this =
     let disposed = atom false
     let cancellation = new CancellationTokenSource()
     let channels = ConcurrentDictionary<ChannelId, Addressable>()
-    let remoteEndpointsByAddress = ConcurrentDictionary<Endpoint, Task<EndpointManager>>()
-    let remoteEndpointsById = Dictionary<NodeId, EndpointManager>()
+    let remotesByEndpoint = ConcurrentDictionary<Endpoint, Task<EndpointManager>>()
+    let remotesById = Dictionary<NodeId, EndpointManager>()
     
     let createEndpointManager (connection: Connection) =
         new EndpointManager(connection, channels)
         
     let addConnection (connection: Connection) = Func<Endpoint,Task<EndpointManager>>(fun _ -> task {
         let mgr = createEndpointManager connection
-        remoteEndpointsById.Add(connection.Manifest.NodeId, mgr)
+        remotesById.Add(connection.Manifest.NodeId, mgr)
         return mgr
     })
     let updateConnection (connection: Connection) = Func<Endpoint, Task<EndpointManager>,Task<EndpointManager>>(fun _ old -> task {
         do! connection.DisposeAsync() //TODO: replace?
         return! old
     })
-        
-    let acceptIncomingConnection (connection: Connection) = unitVtask {
-        let t : Task = upcast remoteEndpointsByAddress.AddOrUpdate(connection.Manifest.Endpoint, (addConnection connection), (updateConnection connection))
-        do! t
-    }
-    
-    let connectionListener = Task.runCancellable cancellation.Token (fun () -> task {
-        let mutable cont = true
-        try
-            while not cancellation.Token.IsCancellationRequested && cont do
-                    let! accepted = transport.Accepted.MoveNextAsync()
-                    if accepted then
-                        do! acceptIncomingConnection transport.Accepted.Current
-                    else cont <- false
-        with e ->
-            printfn "Failed while trying to accept incoming connection: %O" e
-    })
+
+    let connectionListener =
+        transport.Accepted
+        |> AsyncSeq.takeWhile (fun _ -> not cancellation.Token.IsCancellationRequested)
+        |> AsyncSeq.iter (fun connection -> unitVtask {
+            do! remotesByEndpoint.AddOrUpdate(connection.Manifest.Endpoint, (addConnection connection), (updateConnection connection)) |> Task.ignore
+        })
     
     let failIfDisposed () = if !disposed then raise (ObjectDisposedException("Node " + string selfId + " has been disposed"))
            
@@ -122,15 +107,15 @@ type Node(transport: Transport) as this =
             | true, (:? Proxy<'msg> as ch) -> Some ch
             | _ -> None
         else
-            match remoteEndpointsById.TryGetValue nodeId with
+            match remotesById.TryGetValue nodeId with
             | true, mgr -> mgr.TryGet channelId
             | _ -> None
         
     member this.Connect (endpoint: Endpoint, cancellationToken: CancellationToken) : ValueTask<NodeId>  = vtask {
-        let! mgr = remoteEndpointsByAddress.GetOrAdd(endpoint, Func<_,_>(fun e -> task {
+        let! mgr = remotesByEndpoint.GetOrAdd(endpoint, Func<_,_>(fun e -> task {
             let! connection = transport.Connect(endpoint, cancellationToken)
             let mgr = createEndpointManager connection
-            remoteEndpointsById.Add(connection.Manifest.NodeId, mgr)
+            remotesById.Add(connection.Manifest.NodeId, mgr)
             return mgr            
         }))
         return mgr.NodeId
@@ -142,7 +127,7 @@ type Node(transport: Transport) as this =
             let errors = ResizeArray()
             for entry in channels do
                 try ignore (entry.Value.TryComplete null) with e -> errors.Add e
-            for entry in remoteEndpointsById do
+            for entry in remotesById do
                 try do! entry.Value.DisposeAsync() with e -> errors.Add e
             try
                 do! transport.DisposeAsync()

@@ -37,14 +37,14 @@ type Connection =
     inherit IAsyncDisposable
     abstract Manifest: Manifest
     abstract Send: EndpointMessage * CancellationToken -> ValueTask
-    abstract ReceiveNext: CancellationToken -> ValueTask<EndpointMessage>
+    abstract Incoming: IAsyncEnumerable<EndpointMessage>
 
 [<Interface>]
 type Transport =
     inherit IAsyncDisposable
     abstract Manifest: Manifest
     abstract Connect: Endpoint * CancellationToken -> ValueTask<Connection>
-    abstract Accepted: IAsyncEnumerator<Connection>
+    abstract Accepted: IAsyncEnumerable<Connection>
 
 [<Interface>]
 type internal Addressable =
@@ -56,6 +56,7 @@ type internal Addressable =
 type Proxy<'msg> (address: Address) =
     inherit ChannelWriter<'msg>()
     member this.Address = address
+    override this.ToString() = string address
     interface Addressable with
         member this.TryComplete(err) = this.TryComplete(err)
         member this.Address = this.Address
