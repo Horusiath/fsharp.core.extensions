@@ -1,8 +1,6 @@
 namespace Clusterpack
 
 open System
-open System
-open System.Collections.Concurrent
 open System.Collections.Concurrent
 open System.Collections.Generic
 open System.Threading
@@ -12,7 +10,6 @@ open FSharp.Control.Tasks.Builders
 open FSharp.Control.Tasks.Builders.Unsafe
 open FSharp.Core
 open FSharp.Core.Atomic.Operators
-open Grpc.Core
 
 type internal EndpointWriter(connection: Connection) =
     inherit BoundedActor<EndpointMessage>(128)
@@ -26,7 +23,7 @@ type internal EndpointReader(connection: Connection, locals: ConcurrentDictionar
         connection.Incoming
         |> AsyncSeq.takeWhile (fun _ -> not cancellation.Token.IsCancellationRequested)
         |> AsyncSeq.iter (fun envelope -> unitVtask {
-            match envelope  with
+            match envelope with
             | Envelope(struct(_, channelId), msg) ->
                 match locals.TryGetValue(channelId) with
                 | true, addressable ->
@@ -49,7 +46,7 @@ type internal EndpointManager(connection: Connection, locals: ConcurrentDictiona
         Some (downcast remotes.GetOrAdd(channelId, RemoteProxy<'msg>(struct(nodeId, channelId), writer)))
     member this.DisposeAsync() : ValueTask = unitVtask {
         do! reader.DisposeAsync()
-        do! writer.DisposeAsync(true)
+        do! writer.DisposeAsync(false)
         do! connection.DisposeAsync()
     }
     interface IAsyncDisposable with member this.DisposeAsync() = this.DisposeAsync()
@@ -114,6 +111,11 @@ type Node(transport: Transport) as this =
     member this.Connect (endpoint: Endpoint, cancellationToken: CancellationToken) : ValueTask<NodeId>  = vtask {
         let! mgr = remotesByEndpoint.GetOrAdd(endpoint, Func<_,_>(fun e -> task {
             let! connection = transport.Connect(endpoint, cancellationToken)
+            
+            if connection.Manifest.NodeId = selfId then
+                do! connection.DisposeAsync()
+                failwithf "Cannot connect to '%s': remote node ID is identical to local one: %i" endpoint selfId
+                
             let mgr = createEndpointManager connection
             remotesById.Add(connection.Manifest.NodeId, mgr)
             return mgr            

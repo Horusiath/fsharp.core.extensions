@@ -8,6 +8,7 @@
         <Compile Include="Prolog.fs" />
         <Compile Include="Node.fs" />
         <Compile Include="GrpcTransport.fs" />
+        <Compile Include="TestTransport.fs" />
     </ItemGroup>
 
     <ItemGroup>

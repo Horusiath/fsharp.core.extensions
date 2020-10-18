@@ -22,12 +22,10 @@ type GrpcTransport(nodeId: NodeId, endpoint: Endpoint) =
         let toBytes (msg: 'msg) : byte[] =
             use stream = new MemoryStream()
             serializer.Serialize(msg, stream)
-            let bytes = stream.ToArray()
-            bytes
+            stream.ToArray()
         let fromBytes (buf: byte[]) : 'msg =
             use stream = new MemoryStream(buf)
-            let msg = serializer.Deserialize<'msg>(stream)
-            msg
+            serializer.Deserialize<'msg>(stream)
         let msgMarshaller = Marshallers.Create(Func<_,_>(toBytes), Func<_,_>(fromBytes))
         let manifestMarshaller = Marshallers.Create(Func<_,_>(toBytes), Func<_,_>(fromBytes))
         Method<Manifest, EndpointMessage>(MethodType.ServerStreaming, "clusterpack", "messages", manifestMarshaller, msgMarshaller)

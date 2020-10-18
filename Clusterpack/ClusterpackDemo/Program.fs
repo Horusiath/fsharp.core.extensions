@@ -24,9 +24,9 @@ let run (cancel: CancellationToken) = unitVtask {
     
     printfn "Created proxy: %O" local
     
-    // try to create a remote proxy using given address (address is serializable tuple (u32,u32)) 
+    // try to create a remote proxy using given address (address is serializable value tuple (u32,u32)) 
     match b.Proxy(local.Address) with
-    | None -> printfn "Couldn't target proxy '%O' from node '%O'. Nodes are not connected." local.Address b.Manifest.NodeId
+    | None -> printfn "Proxy to '%O' failed. Nodes are not connected." local.Address
     | Some remote ->
         // send message to channel "living" on node A via remote proxy from node B
         do! remote.WriteAsync("Hello from remote!")

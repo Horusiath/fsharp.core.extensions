@@ -51,7 +51,7 @@ type internal Addressable =
     abstract Address: Address
     abstract Pass: message:obj * CancellationToken -> ValueTask
     abstract TryComplete: exn -> bool
-    
+        
 [<AbstractClass>]
 type Proxy<'msg> (address: Address) =
     inherit ChannelWriter<'msg>()
