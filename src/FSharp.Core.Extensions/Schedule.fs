@@ -22,7 +22,7 @@ open System
 open System.Collections.Generic
 open System.Threading
 open System.Threading.Tasks
-open FSharp.Control.Tasks.Builders.Unsafe
+open FSharp.Control.Tasks.Affine.Unsafe
 open FSharp.Core
 
 /// Schedule is an immutable data type, that allows to apply iterator pipeline over non-blocking delays and timeouts.

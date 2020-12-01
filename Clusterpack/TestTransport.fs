@@ -6,7 +6,7 @@ open System.Collections.Generic
 open System.Threading
 open System.Threading.Channels
 open Clusterpack
-open FSharp.Control.Tasks.Builders
+open FSharp.Control.Tasks
 open FSharp.Core
 
 [<Sealed>]

@@ -1,7 +1,7 @@
 namespace Benchmarks
 
 open BenchmarkDotNet.Attributes
-open FSharp.Control.Tasks.Builders.Unsafe
+open FSharp.Control.Tasks.Affine.Unsafe
 open FSharp.Core
 
 [<Sealed>]

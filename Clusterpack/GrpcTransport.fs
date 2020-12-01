@@ -8,7 +8,7 @@ open System.Net
 open System.Threading
 open System.Threading.Tasks
 open Clusterpack
-open FSharp.Control.Tasks.Builders
+open FSharp.Control.Tasks
 open Grpc.Core
 open FSharp.Core
 

@@ -19,6 +19,7 @@ limitations under the License.
 module FSharp.Core.Extensions.Tests.Atomic
 
 open FSharp.Core
+open FSharp.Core.Operators
 open FSharp.Core.Atomic.Operators
 open Expecto
 

@@ -22,7 +22,7 @@ open System
 open System.Threading
 open System.Threading.Tasks
 open Expecto
-open FSharp.Control.Tasks.Builders
+open FSharp.Control.Tasks
 open FSharp.Core
 open FSharp.Core
 

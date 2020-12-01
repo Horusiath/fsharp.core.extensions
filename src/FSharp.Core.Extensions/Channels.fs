@@ -20,7 +20,7 @@ namespace FSharp.Core
 
 open System
 open System.Runtime.CompilerServices
-open FSharp.Control.Tasks.Builders
+open FSharp.Control.Tasks
 open System.Threading.Channels
 open System.Threading.Tasks
 

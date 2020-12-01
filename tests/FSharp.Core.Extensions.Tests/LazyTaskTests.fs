@@ -23,7 +23,7 @@ open System.Threading.Tasks
 open FSharp.Core
 open FsCheck
 open Expecto
-open FSharp.Control.Tasks.Builders
+open FSharp.Control.Tasks
 
 [<Tests>]
 let tests =

@@ -6,9 +6,10 @@ open System.Collections.Generic
 open System.Threading
 open System.Threading.Channels
 open System.Threading.Tasks
-open FSharp.Control.Tasks.Builders
-open FSharp.Control.Tasks.Builders.Unsafe
+open FSharp.Control.Tasks
+open FSharp.Control.Tasks.Affine.Unsafe
 open FSharp.Core
+open FSharp.Core.Operators
 open FSharp.Core.Atomic.Operators
 
 type internal EndpointWriter(connection: Connection) =

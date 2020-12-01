@@ -4,7 +4,7 @@ open BenchmarkDotNet.Running
 open System
 open System.Reflection
 open FSharp.Core
-open FSharp.Control.Tasks.Builders.Unsafe
+open FSharp.Control.Tasks.Affine.Unsafe
 
 [<EntryPoint>]
 let main argv =

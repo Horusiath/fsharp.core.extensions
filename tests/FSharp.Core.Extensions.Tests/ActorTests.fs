@@ -22,10 +22,11 @@ open System
 open System.Threading
 open System.Threading.Tasks
 open FSharp.Core
+open FSharp.Core.Operators
 open FSharp.Core.Atomic.Operators
 open FsCheck
 open Expecto
-open FSharp.Control.Tasks.Builders.Unsafe
+open FSharp.Control.Tasks.Affine.Unsafe
 
 type Message =
     | Add of int

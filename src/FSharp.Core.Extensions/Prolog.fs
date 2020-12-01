@@ -25,6 +25,8 @@ let inline (!%) (x:^a) : ^b = ((^a or ^b) : (static member op_Implicit : ^a -> ^
 /// Creates a `KeyValuePair<k,v>` out of provided `key` and `value` arguments.
 let inline (=>) (key: 'k) (value: 'v): KeyValuePair<'k,'v> = KeyValuePair(key, value)
 
+let inline (!) (container: ^a) : ^b when ^a : (member Value: ^b) = (^a : (member Value: ^b) container)
+
 type System.TimeSpan with
 
     /// Multiplies given time span by a given number of `times` eg. 2.sec * 2.5 => 5.sec.

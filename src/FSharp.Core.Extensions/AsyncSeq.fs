@@ -22,8 +22,8 @@ open System
 open System.Collections.Generic
 open System.Runtime.ExceptionServices
 open System.Threading
-open FSharp.Control.Tasks.Builders
-open FSharp.Control.Tasks.Builders.Unsafe
+open FSharp.Control.Tasks
+open FSharp.Control.Tasks.Affine.Unsafe
 open System.Threading.Channels
 open System.Threading.Tasks
 
@@ -477,7 +477,7 @@ module AsyncSeq =
             |> Seq.map (fun e -> Task.Run(Func<Task>(fun () -> unitTask {
                 let! hasNext = e.MoveNextAsync()
                 let mutable hasNext' = hasNext
-                while active.Value() && not cancel.IsCancellationRequested && hasNext' do
+                while active.Value && not cancel.IsCancellationRequested && hasNext' do
                     let current = e.Current
                     do! input.Writer.WriteAsync(current, cancel)
                     let! hasNext = e.MoveNextAsync()
@@ -633,7 +633,7 @@ module AsyncSeq =
                         inner.DisposeAsync()
                     member __.MoveNextAsync() = vtask {
                         let mutable hasNext = not cancel.IsCancellationRequested
-                        while hasNext && skip.Value() do
+                        while hasNext && skip.Value do
                             let! next = inner.MoveNextAsync()
                             hasNext <- next
                             

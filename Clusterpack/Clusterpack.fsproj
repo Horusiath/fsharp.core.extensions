@@ -1,7 +1,8 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <TargetFramework>netcoreapp3.1</TargetFramework>
+        <TargetFramework>net5.0</TargetFramework>
+        <LangVersion>preview</LangVersion>
     </PropertyGroup>
 
     <ItemGroup>
@@ -16,9 +17,9 @@
     </ItemGroup>
 
     <ItemGroup>
-      <PackageReference Include="Grpc.Core" Version="2.32.0" />
+      <PackageReference Include="Grpc.Core" Version="2.33.1" />
       <PackageReference Include="Hyperion" Version="0.9.16" />
-      <PackageReference Include="System.IO.Pipelines" Version="4.7.3" />
+      <PackageReference Include="System.IO.Pipelines" Version="5.0.0" />
     </ItemGroup>
 
 </Project>

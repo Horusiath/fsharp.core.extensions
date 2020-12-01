@@ -4,7 +4,7 @@ open System
 open System.Threading
 open Clusterpack
 open Clusterpack.Grpc
-open FSharp.Control.Tasks.Builders
+open FSharp.Control.Tasks
 open FSharp.Core
 
 let start nodeId endpoint =

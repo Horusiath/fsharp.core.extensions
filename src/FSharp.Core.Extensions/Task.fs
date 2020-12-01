@@ -18,7 +18,7 @@ limitations under the License.
 
 namespace FSharp.Core
 
-open FSharp.Control.Tasks.Builders
+open FSharp.Control.Tasks
 open System.Threading.Tasks
 open System.Threading
 open System

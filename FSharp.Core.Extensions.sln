@@ -7,9 +7,6 @@ EndProject
 Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "Benchmarks", "tests\Benchmarks\Benchmarks.fsproj", "{A5CF9299-5AD5-441A-90AF-46F81DB4E48C}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "build", "build", "{F7724E3F-37DC-4104-9238-FDF71C4DF84D}"
-ProjectSection(SolutionItems) = preProject
-	global.json = global.json
-EndProjectSection
 EndProject
 Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "Clusterpack", "Clusterpack\Clusterpack.fsproj", "{5444A20A-F0C1-48F3-8780-F68B6B7D9DFF}"
 EndProject
