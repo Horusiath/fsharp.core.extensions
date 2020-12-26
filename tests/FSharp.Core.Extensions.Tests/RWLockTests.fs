@@ -18,6 +18,7 @@ limitations under the License.
 
 module FSharp.Core.Extensions.Tests.RWLockTests
 
+open System
 open System.Threading
 open System.Threading.Tasks
 open Expecto
@@ -34,11 +35,33 @@ let testsUnbounded = testList "Reentrant lock" [
         })
     }
     
+    testTask "cancelled read lock handle" {
+        do! Task.run (fun () -> task {
+            try
+                use lock = RWLock.reentrant 123
+                use! reader = lock.Read(CancellationToken(true))
+                failwith "reader lock has been cancelled"
+            with
+            | :? OperationCanceledException -> ()
+        })
+    }
+    
     testTask "write lock handle: reads" {
         do! Task.run (fun () -> task {
             use lock = RWLock.reentrant 123
             use! writer = lock.Write()
             Expect.equal writer.Value 123 "read lock should return actual value"
+        })
+    }
+    
+    testTask "cancelled write lock handle" {
+        do! Task.run (fun () -> task {
+            try
+                use lock = RWLock.reentrant 123
+                use! reader = lock.Write(CancellationToken(true))
+                failwith "writer lock has been cancelled"
+            with
+            | :? OperationCanceledException -> ()
         })
     }
     
@@ -61,6 +84,19 @@ let testsUnbounded = testList "Reentrant lock" [
             let mutable w = writer
             w.Value <- v + 20
             Expect.equal reader.Value 120 "read lock should return actual value after upgrade"
+        })
+    }
+    
+    testTask "read lock handle: upgrades (cancelled)" {
+        do! Task.run (fun () -> task {
+            try
+                use lock = RWLock.reentrant 100
+                use! reader = lock.Read()
+                let v = reader.Value
+                use! writer = reader.Upgrade(CancellationToken(true))
+                failwith "lock upgrade has been cancelled"
+            with
+            | :? OperationCanceledException -> ()
         })
     }
         
@@ -108,5 +144,31 @@ let testsUnbounded = testList "Reentrant lock" [
             Expect.equal writer.Value 120 "write lock should return updated value"
         })
         do! Task.WhenAll(t1, t2)        
+    }
+    
+    testTask "concurrent reads with cancelled write" {
+        use lock = RWLock.reentrant 100
+        let t1 = Task.run (fun () -> task {
+            use! reader = lock.Read()       // obtain read lock first
+            do! Task.Delay 1000             // complete it after t3 was cancelled
+            Expect.equal reader.Value 100 "1st read lock should return value"
+        })        
+        let t2 = Task.run (fun () -> task {
+            do! Task.Delay 500              // obtain 2nd read lock after write lock
+            use! reader = lock.Read()    
+            Expect.equal reader.Value 100 "2nd read lock should return value"
+        })
+        let t3 = Task.run (fun () -> task {
+            try
+                do! Task.Delay 100
+                use cts = new CancellationTokenSource(100)
+                use! writer = lock.Write(cts.Token)
+                let mutable w = writer
+                w.Value <- 120
+                failwith "write lock should be cancelled"
+            with
+            | :? OperationCanceledException -> ()
+        })
+        do! Task.WhenAll(t1, t2, t3)        
     }
 ]

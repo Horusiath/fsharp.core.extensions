@@ -18,6 +18,7 @@ namespace FSharp.Core
 
 open System
 open System.Collections.Concurrent
+open System.Collections.Generic
 open System.Collections.Immutable
 open System.Runtime.CompilerServices
 open System.Threading
@@ -129,8 +130,8 @@ type internal LockAwaiter<'h> private() =
     member private this.AssertToken(token) =
         if this.token <> token then invalidOp ("Lock awaiter executed with wrong token")
         
-    member this.Complete() =
-        if this.cancellationToken.IsCancellationRequested then
+    member this.Complete(force: bool) =
+        if not force && this.cancellationToken.IsCancellationRequested then
             this.status <- ValueTaskSourceStatus.Canceled
         else
             this.status <- ValueTaskSourceStatus.Succeeded
@@ -185,7 +186,18 @@ and [<Sealed; NoComparison; NoEquality>] RWLock<'a>(initialValue: 'a) =
     [<MethodImpl(MethodImplOptions.NoInlining)>]
     let throwIfDisposed() : unit =
         if obj.ReferenceEquals(null, !state) then raise LockUtils.disposedException
-    
+        
+    let rec pollNonCancelledWriter (writers: ImmutableQueue<_> byref, awaiter: LockAwaiter<_> byref, cancelled: Queue<_>) =
+        if writers.IsEmpty then false
+        else
+            let w = writers.Dequeue(&awaiter)
+            writers <- w
+            if awaiter.cancellationToken.IsCancellationRequested then
+                cancelled.Enqueue awaiter
+                if writers.IsEmpty then false
+                else pollNonCancelledWriter(&writers, &awaiter, cancelled)
+            else true
+
     member internal this.GetValue() =
         let s = !state
         if obj.ReferenceEquals(null, s) then raise LockUtils.disposedException
@@ -254,20 +266,32 @@ and [<Sealed; NoComparison; NoEquality>] RWLock<'a>(initialValue: 'a) =
                 if Atomic.cas old { old with LockState = updated } state then ()
                 else attempt state id
             else
+                let cancelled = Queue<_>()
+                let mutable writers = old.AwaitingWriters
+                let mutable awaiter = Unchecked.defaultof<_>
                 // read and write locks are released, we can try to acquire write now
-                if old.AwaitingWriters.IsEmpty then
+                if not (pollNonCancelledWriter(&writers, &awaiter, cancelled)) then
                     // no awaiting writers, try release all readers
                     let readers = old.AwaitingReaders
+                    //TODO: use immutable builders to range updates?
+                    let completed = Queue<_>()
                     for awaiter in readers do
-                        updated <- updated.AdjustRead(awaiter.handle.LockId, 1)
+                        if not awaiter.cancellationToken.IsCancellationRequested then 
+                            updated <- updated.AdjustRead(awaiter.handle.LockId, 1)
+                            completed.Enqueue true
+                        else completed.Enqueue false
                     if Atomic.cas old { old with LockState = updated; AwaitingReaders = ImmutableQueue.Empty } state then
-                        for awaiter in readers do awaiter.Complete()
+                        for c in cancelled do c.Complete(false)
+                        for awaiter in readers do
+                            // once we called AdjustRead, we passed point of no return, we cannot cancel now
+                            let force = completed.Dequeue() 
+                            awaiter.Complete(force)
                     else attempt state id
                 else
-                    let (modified, awaiter) = old.AwaitingWriters.Dequeue()
                     updated <- Write(1, 0, awaiter.handle.LockId)
-                    if Atomic.cas old { old with LockState = updated; AwaitingWriters = modified } state then
-                        awaiter.Complete()
+                    if Atomic.cas old { old with LockState = updated; AwaitingWriters = writers } state then
+                        awaiter.Complete(true)
+                        for c in cancelled do c.Complete(false)
                     else attempt state id
         attempt state id
     member internal this.ReleaseWrite(id: int) =
@@ -282,20 +306,33 @@ and [<Sealed; NoComparison; NoEquality>] RWLock<'a>(initialValue: 'a) =
                         Read (if r = 0 then Map.empty else Map.add id r Map.empty)
                     else Write(writes, r, ownerId)
                 | other -> other
-            if updated.IsReadLocked || old.AwaitingWriters.IsEmpty then
-                // no awaiting writers, try release all readers
-                let readers = old.AwaitingReaders
-                for awaiter in readers do
-                    updated <- updated.AdjustRead(awaiter.handle.LockId, 1)
-                if Atomic.cas old { old with LockState = updated; AwaitingReaders = ImmutableQueue.Empty } state then
-                    for awaiter in readers do awaiter.Complete()
+            // read lock is not held, so try to find awaiting writer than can be completed
+            let cancelled = Queue<_>()
+            let mutable writers = old.AwaitingWriters
+            let mutable awaiter = Unchecked.defaultof<_>
+            if not updated.IsReadLocked && pollNonCancelledWriter(&writers, &awaiter, cancelled) then
+                // all locks have been released, try complete next awaiting writer writer
+                updated <- Write(1, 0, awaiter.handle.LockId)
+                if Atomic.cas old { old with LockState = updated; AwaitingWriters = writers } state then
+                    awaiter.Complete(true)
+                    for c in cancelled do c.Complete(false)
                 else attempt state id
             else
-                // all locks have been released, try complete next awaiting writer writer
-                let (modified, awaiter) = old.AwaitingWriters.Dequeue()
-                updated <- Write(1, 0, awaiter.handle.LockId)
-                if Atomic.cas old { old with LockState = updated; AwaitingWriters = modified } state then
-                    awaiter.Complete()
+                // no awaiting writers, try release all readers
+                let mutable updated = updated
+                let readers = old.AwaitingReaders      
+                let completed = Queue<_>()
+                for awaiter in readers do
+                    if not awaiter.cancellationToken.IsCancellationRequested then 
+                        updated <- updated.AdjustRead(awaiter.handle.LockId, 1)
+                        completed.Enqueue true
+                    else completed.Enqueue false
+                if Atomic.cas old { old with LockState = updated; AwaitingReaders = ImmutableQueue.Empty } state then
+                    for c in cancelled do c.Complete(false)
+                    for awaiter in readers do
+                        // once we called AdjustRead, we passed point of no return, we cannot cancel now
+                        let force = completed.Dequeue() 
+                        awaiter.Complete(force)
                 else attempt state id
         attempt state id
     
