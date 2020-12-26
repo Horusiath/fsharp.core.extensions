@@ -63,19 +63,50 @@ let testsUnbounded = testList "Reentrant lock" [
             Expect.equal reader.Value 120 "read lock should return actual value after upgrade"
         })
     }
+        
+    testTask "read lock over write lock on the same task" {
+        do! Task.run (fun () -> task {
+            use lock = RWLock.reentrant 100
+            use! writer = lock.Write()
+            let mutable w = writer
+            w.Value <- w.Value + 20
+            do! Task.Yield()
+            use! reader = lock.Read() // even thou we didn't release write lock yet, we should be able to acquire read
+            Expect.equal reader.Value 120 "read lock should return actual value after upgrade"
+        })
+    }
     
     testTask "concurrent read then write" {
         use lock = RWLock.reentrant 100
-        let t1 = Task.run (fun () -> Affine.task {
+        let t1 = Task.run (fun () -> task {
             use! reader = lock.Read()   // obtain read lock first
-            do! Task.Delay 500          // wait to force writ lock into awaiters queue 
-            Expect.equal reader.Value 100 "read lock should return actual value"
+            do! Task.Delay 500          // wait to force write lock into awaiters queue 
+            Expect.equal reader.Value 100 "read lock should return value prior to write lock update"
         })
         let t2 = Task.run (fun () -> task {
             do! Task.Delay(100)
             use! writer = lock.Write()
-            Expect.equal writer.Value 100 "write lock should return actual value"
+            let mutable w = writer
+            w.Value <- 120
+            Expect.equal writer.Value 120 "write lock should return updated value"
         })
         do! Task.WhenAll(t1, t2)
+    }
+    
+    testTask "concurrent write then read" {
+        use lock = RWLock.reentrant 100
+        let t1 = Task.run (fun () -> task {
+            do! Task.Delay(100)         // obtain write lock first
+            use! reader = lock.Read()    
+            Expect.equal reader.Value 120 "read lock should return value updated by write lock"
+        })
+        let t2 = Task.run (fun () -> task {
+            use! writer = lock.Write()
+            let mutable w = writer
+            do! Task.Delay 500          // wait to force read lock into awaiters queue
+            w.Value <- 120              // at this point reader lock still should be awaiting for write lock release
+            Expect.equal writer.Value 120 "write lock should return updated value"
+        })
+        do! Task.WhenAll(t1, t2)        
     }
 ]

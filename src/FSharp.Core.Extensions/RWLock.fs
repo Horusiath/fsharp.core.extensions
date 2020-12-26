@@ -29,9 +29,9 @@ open FSharp.Core.Atomic.Operators
 module private LockUtils =
     let counter = atom 0
     let current: AsyncLocal<int> = AsyncLocal()
-    let inline currentTaskId () =
+    let inline lockId () =
         if current.Value = 0 then
-            current.Value <- counter |> Atomic.update (fun c -> (c + 1) % Int32.MaxValue)
+            current.Value <- Atomic.incr counter 
         current.Value
         
     let inline asToken (i: int): int16 =
@@ -41,7 +41,6 @@ module private LockUtils =
         
     let disposedException = ObjectDisposedException "RWLock has been disposed"
 
-[<Struct>]
 type private LockState =
     | Write of writeLocks:int * readLocks:int * ownerId:int
     | Read of Map<int, int>
@@ -250,7 +249,7 @@ and [<Sealed; NoComparison; NoEquality>] RWLock<'a>(initialValue: 'a) =
     member internal this.ReleaseRead(id: int) =
         let rec attempt (state: AtomicRef<_>) (id: int) =
             let old = !state
-            let updated = old.LockState.AdjustRead(id, -1)
+            let mutable updated = old.LockState.AdjustRead(id, -1)
             if updated.IsReadLocked then
                 if Atomic.cas old { old with LockState = updated } state then ()
                 else attempt state id
@@ -259,11 +258,14 @@ and [<Sealed; NoComparison; NoEquality>] RWLock<'a>(initialValue: 'a) =
                 if old.AwaitingWriters.IsEmpty then
                     // no awaiting writers, try release all readers
                     let readers = old.AwaitingReaders
+                    for awaiter in readers do
+                        updated <- updated.AdjustRead(awaiter.handle.LockId, 1)
                     if Atomic.cas old { old with LockState = updated; AwaitingReaders = ImmutableQueue.Empty } state then
                         for awaiter in readers do awaiter.Complete()
                     else attempt state id
                 else
                     let (modified, awaiter) = old.AwaitingWriters.Dequeue()
+                    updated <- Write(1, 0, awaiter.handle.LockId)
                     if Atomic.cas old { old with LockState = updated; AwaitingWriters = modified } state then
                         awaiter.Complete()
                     else attempt state id
@@ -271,7 +273,7 @@ and [<Sealed; NoComparison; NoEquality>] RWLock<'a>(initialValue: 'a) =
     member internal this.ReleaseWrite(id: int) =
         let rec attempt (state: AtomicRef<_>) (id: int) =
             let old = !state
-            let updated =
+            let mutable updated =
                 match old.LockState with
                 | Write(w, r, ownerId) when ownerId = id ->
                     let writes = w - 1
@@ -280,21 +282,21 @@ and [<Sealed; NoComparison; NoEquality>] RWLock<'a>(initialValue: 'a) =
                         Read (if r = 0 then Map.empty else Map.add id r Map.empty)
                     else Write(writes, r, ownerId)
                 | other -> other
-            if updated.IsReadLocked then
-                // write lock has been released, try complete next awaiting writer writer
-                if old.AwaitingWriters.IsEmpty then
-                    // no awaiting writers, try release all readers
-                    let readers = old.AwaitingReaders
-                    if Atomic.cas old { old with LockState = updated; AwaitingReaders = ImmutableQueue.Empty } state then
-                        for awaiter in readers do awaiter.Complete()
-                    else attempt state id
-                else
-                    let (modified, awaiter) = old.AwaitingWriters.Dequeue()
-                    if Atomic.cas old { old with LockState = updated; AwaitingWriters = modified } state then
-                        awaiter.Complete()
-                    else attempt state id
-            elif Atomic.cas old { old with LockState = updated } state then ()
-            else attempt state id
+            if updated.IsReadLocked || old.AwaitingWriters.IsEmpty then
+                // no awaiting writers, try release all readers
+                let readers = old.AwaitingReaders
+                for awaiter in readers do
+                    updated <- updated.AdjustRead(awaiter.handle.LockId, 1)
+                if Atomic.cas old { old with LockState = updated; AwaitingReaders = ImmutableQueue.Empty } state then
+                    for awaiter in readers do awaiter.Complete()
+                else attempt state id
+            else
+                // all locks have been released, try complete next awaiting writer writer
+                let (modified, awaiter) = old.AwaitingWriters.Dequeue()
+                updated <- Write(1, 0, awaiter.handle.LockId)
+                if Atomic.cas old { old with LockState = updated; AwaitingWriters = modified } state then
+                    awaiter.Complete()
+                else attempt state id
         attempt state id
     
     /// Obtain a read-only lock handle. In case when it's not immediately possible eg.
@@ -303,7 +305,7 @@ and [<Sealed; NoComparison; NoEquality>] RWLock<'a>(initialValue: 'a) =
     member this.Read(?cancellationToken: CancellationToken): ValueTask<ReadHandle<'a>> =
         throwIfDisposed()
         let cancellationToken = cancellationToken |> Option.defaultValue CancellationToken.None
-        let taskId = LockUtils.currentTaskId()
+        let taskId = LockUtils.lockId()
         match this.AcquireRead(taskId, cancellationToken) with
         | ValueNone -> ValueTask<_>(new ReadHandle<'a>(this, taskId))
         | ValueSome awaiter -> ValueTask<_>(awaiter, awaiter.token)
@@ -314,8 +316,8 @@ and [<Sealed; NoComparison; NoEquality>] RWLock<'a>(initialValue: 'a) =
     member this.Write(?cancellationToken: CancellationToken): ValueTask<WriteHandle<'a>> =
         throwIfDisposed()
         let cancellationToken = cancellationToken |> Option.defaultValue CancellationToken.None
-        let taskId = LockUtils.currentTaskId()
-        match this.AcquireWrite(LockUtils.currentTaskId(), cancellationToken) with
+        let taskId = LockUtils.lockId()
+        match this.AcquireWrite(LockUtils.lockId(), cancellationToken) with
         | ValueNone -> ValueTask<_>(new WriteHandle<'a>(this, taskId))
         | ValueSome awaiter -> ValueTask<_>(awaiter, awaiter.token)
     member this.IsDisposed = obj.ReferenceEquals(null, !state)
@@ -325,30 +327,40 @@ and [<Sealed; NoComparison; NoEquality>] RWLock<'a>(initialValue: 'a) =
         for awaiter in old.AwaitingWriters do awaiter.Fail()
     interface IDisposable with member this.Dispose() = this.Dispose()
 
-and [<Struct; NoComparison; NoEquality>] WriteHandle<'a> internal(lock: RWLock<'a>, taskId: int) =
+and [<Struct; NoComparison; NoEquality>] WriteHandle<'a> internal(lock: RWLock<'a>, lockId: int) =
+    member this.LockId: int = lockId
     member this.Value
         with [<MethodImpl(MethodImplOptions.AggressiveInlining)>] get () = lock.GetValue()
         and [<MethodImpl(MethodImplOptions.AggressiveInlining)>] set value = lock.SetValue value
-    member this.Dispose() = lock.ReleaseWrite(taskId)
+    member this.Dispose() = lock.ReleaseWrite(lockId)
     interface IDisposable with member this.Dispose() = this.Dispose()
     
-and [<Struct; IsReadOnly; NoComparison; NoEquality>] ReadHandle<'a> internal(lock: RWLock<'a>, taskId: int) =
+and [<Struct; IsReadOnly; NoComparison; NoEquality>] ReadHandle<'a> internal(lock: RWLock<'a>, lockId: int) =
+    member this.LockId: int = lockId
     member this.Value with [<MethodImpl(MethodImplOptions.AggressiveInlining)>] get () = lock.GetValue()
     
     /// Upgrades current read lock into write lock, returning new (writable) lock handle.
     /// This lock still can be used for reads until it's disposed.
     member this.Upgrade(?cancellationToken: CancellationToken): ValueTask<WriteHandle<'a>> =
         let cancellationToken = cancellationToken |> Option.defaultValue CancellationToken.None
-        match lock.AcquireWrite(LockUtils.currentTaskId(), cancellationToken) with
-        | ValueNone -> ValueTask<_>(new WriteHandle<'a>(lock, taskId))
+        match lock.AcquireWrite(LockUtils.lockId(), cancellationToken) with
+        | ValueNone -> ValueTask<_>(new WriteHandle<'a>(lock, lockId))
         | ValueSome awaiter -> ValueTask<_>(awaiter, awaiter.token)
-    member this.Dispose() = lock.ReleaseRead(taskId)
+    member this.Dispose() = lock.ReleaseRead(lockId)
     interface IDisposable with member this.Dispose() = this.Dispose()
     
 [<RequireQualifiedAccess>]
 module RWLock =
     
+    /// Create a new instance of user-spec, asynchronous, read/write lock over specified
+    /// value. Access to this value will be guarded within that lock.
     let inline reentrant (initialValue: 'a) = new RWLock<'a>(initialValue)
     
+    /// Acquire read lock.
     let inline read (lock: RWLock<'a>) = lock.Read()
+    
+    /// Acquire write lock.
     let inline write (lock: RWLock<'a>) = lock.Write()
+    
+    /// Returns a lock identifier used to track continuity of current task's scope.
+    let currentLockId () = LockUtils.lockId ()
