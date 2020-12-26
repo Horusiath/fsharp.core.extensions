@@ -15,6 +15,7 @@
     <Compile Include="ChannelTests.fs" />
     <Compile Include="ScheduleTests.fs" />
     <Compile Include="ActorTests.fs" />
+    <Compile Include="RWLockTests.fs" />
     <Compile Include="Main.fs" />
     <Content Include="paket.references" />
   </ItemGroup>
