@@ -27,9 +27,12 @@ open FSharp.Core
 open FSharp.Core.Atomic.Operators
 
 module private LockUtils =
+    let counter = atom 0
+    let current: AsyncLocal<int> = AsyncLocal()
     let inline currentTaskId () =
-        let t = Task.CurrentId
-        if t.HasValue then t.Value else invalidOp "This operation must be executed in scope of a task."
+        if current.Value = 0 then
+            current.Value <- counter |> Atomic.update (fun c -> (c + 1) % Int32.MaxValue)
+        current.Value
         
     let inline asToken (i: int): int16 =
         let hi = (i &&& 0xffff0000) >>> 16

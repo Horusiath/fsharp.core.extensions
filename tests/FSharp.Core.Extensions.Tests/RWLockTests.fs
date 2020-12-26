@@ -66,15 +66,13 @@ let testsUnbounded = testList "Reentrant lock" [
     
     testTask "concurrent read then write" {
         use lock = RWLock.reentrant 100
-        let t1 = Task.run (fun () -> task {
+        let t1 = Task.run (fun () -> Affine.task {
             use! reader = lock.Read()   // obtain read lock first
             do! Task.Delay 500          // wait to force writ lock into awaiters queue 
             Expect.equal reader.Value 100 "read lock should return actual value"
         })
         let t2 = Task.run (fun () -> task {
-            printfn "%O" Thread.CurrentThread.ManagedThreadId
-            do! Task.Delay 100          // force read lock to be obtained first
-            printfn "%O" Thread.CurrentThread.ManagedThreadId
+            do! Task.Delay(100)
             use! writer = lock.Write()
             Expect.equal writer.Value 100 "write lock should return actual value"
         })
