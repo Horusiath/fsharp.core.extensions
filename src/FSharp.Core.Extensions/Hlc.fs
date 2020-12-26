@@ -17,9 +17,6 @@ limitations under the License.
 namespace FSharp.Core
 
 open System
-open System
-open System.Runtime.CompilerServices
-open System.Threading
 
 /// Implementation of Hybrid-Logical Time, which aims to provide a consistent always increasing timestamps,
 /// which is not always guaranteed by a `System.DateTime.UtcNow` property. In order to achieve that, when

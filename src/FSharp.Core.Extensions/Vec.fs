@@ -17,13 +17,10 @@ limitations under the License.
 namespace FSharp.Core
 
 open System
-open System
-open System.Buffers
-open System.Buffers
 open System.Collections.Generic
-open System.Numerics
 open System.Runtime.CompilerServices
-open System.Runtime.InteropServices
+
+#nowarn "25"
 
 //TODO: try change to struct with tagged union VenNode<'a>(tag:byte, (children:VecNode<'a>[] | values:'a[]))
 [<NoEquality;NoComparison>]

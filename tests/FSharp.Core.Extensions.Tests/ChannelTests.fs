@@ -19,12 +19,10 @@ limitations under the License.
 module FSharp.Core.Extensions.Tests.ChannelTask
 
 open System
-open System.Threading
 open System.Threading.Tasks
 open FSharp.Core
-open FsCheck
 open Expecto
-open FSharp.Control.Tasks.Builders
+open FSharp.Control.Tasks
 
 let private testChannel items =
     let w, r = Channel.unboundedMpsc ()

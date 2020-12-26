@@ -22,8 +22,8 @@ open System
 open System.Collections.Generic
 open System.Runtime.ExceptionServices
 open System.Threading
-open FSharp.Control.Tasks.Builders
-open FSharp.Control.Tasks.Builders.Unsafe
+open FSharp.Control.Tasks
+open FSharp.Control.Tasks.Affine.Unsafe
 open System.Threading.Channels
 open System.Threading.Tasks
 

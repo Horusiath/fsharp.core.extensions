@@ -17,8 +17,6 @@ limitations under the License.
 namespace FSharp.Core
 
 open System
-open System
-open System.Buffers.Binary
 open System.Collections.Generic
 
 [<Sealed>]

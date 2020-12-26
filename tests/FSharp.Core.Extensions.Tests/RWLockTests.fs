@@ -22,7 +22,7 @@ open System.Threading
 open System.Threading.Tasks
 open Expecto
 open FSharp.Core
-open FSharp.Control.Tasks.Builders
+open FSharp.Control.Tasks
 
 [<Tests>]
 let testsUnbounded = testList "Reentrant lock" [

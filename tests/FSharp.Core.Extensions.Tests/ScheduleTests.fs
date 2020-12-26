@@ -23,10 +23,8 @@ open System.Diagnostics
 open System.Threading
 open System.Threading.Tasks
 open FSharp.Core
-open FSharp.Core.Atomic.Operators
-open FsCheck
 open Expecto
-open FSharp.Control.Tasks.Builders.Unsafe
+open FSharp.Control.Tasks.Affine.Unsafe
 open MBrace.FsPickler
 
 let private eval (x: ValueTask<'a>) = x.GetAwaiter().GetResult()

@@ -19,13 +19,11 @@ limitations under the License.
 module FSharp.Core.Extensions.Tests.ActorTests
 
 open System
-open System.Threading
 open System.Threading.Tasks
 open FSharp.Core
 open FSharp.Core.Atomic.Operators
-open FsCheck
 open Expecto
-open FSharp.Control.Tasks.Builders.Unsafe
+open FSharp.Control.Tasks.Affine.Unsafe
 
 type Message =
     | Add of int
@@ -64,7 +62,7 @@ let testsUnbounded =
                     { new UnboundedActor<_>() with
                         override ctx.Receive msg = uunitVtask {
                             if state = 0 then
-                                ctx.CancellationToken.Register (System.Action(fun () -> (flag := true) |> ignore)) |> ignore
+                                ctx.CancellationToken.Register (Action(fun () -> (flag := true) |> ignore)) |> ignore
                             match msg with
                             | Add v -> state <- state + v
                             | Done -> ctx.Complete()
@@ -197,7 +195,7 @@ let testsBounded =
                     { new BoundedActor<_>(2) with
                         override ctx.Receive msg = uunitVtask {
                             if state = 0 then
-                                ctx.CancellationToken.Register (System.Action(fun () -> (flag := true) |> ignore)) |> ignore
+                                ctx.CancellationToken.Register (Action(fun () -> (flag := true) |> ignore)) |> ignore
                             match msg with
                             | Add v -> state <- state + v
                             | Done -> ctx.Complete()

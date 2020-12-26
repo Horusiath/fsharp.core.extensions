@@ -16,7 +16,6 @@ limitations under the License.
 
 namespace FSharp.Core
 
-open System
 open System.Threading
 open System.Runtime.CompilerServices
 

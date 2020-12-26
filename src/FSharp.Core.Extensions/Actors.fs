@@ -24,7 +24,6 @@ open System.Threading
 open System.Threading.Channels
 open System.Threading.Tasks
 open System.Runtime.CompilerServices
-open FSharp.Control.Tasks.Builders.Unsafe
    
 // This is much better optimized than TAwaiter.OnCompleted(Action action) behind the scenes.
 // As IAsyncStateMachineBox (created from an IAsyncStateMachine) enjoys a lot of fast paths.

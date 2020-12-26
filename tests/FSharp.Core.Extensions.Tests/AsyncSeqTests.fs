@@ -22,8 +22,7 @@ open System
 open System.Threading
 open System.Threading.Tasks
 open Expecto
-open FSharp.Control.Tasks.Builders
-open FSharp.Core
+open FSharp.Control.Tasks
 open FSharp.Core
 
 let private eval (x: ValueTask<'a>) = x.GetAwaiter().GetResult()
