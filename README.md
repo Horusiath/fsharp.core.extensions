@@ -89,6 +89,37 @@ Here's the performance check of given operations - the operation is about gettin
 |   SemaphoreSlim |   103.32 ns |  0.965 ns |  0.903 ns |   6.45 |    0.06 |     - |     - |     - |         - |
 
 
+### RWLock
+
+It's an implementation of reentrant reader/writer lock, existing fully in user-space (no syscalls). It's async/await compatible, supports cancellation and offers a safe and ergonomic API:
+
+```fsharp
+open System.Threading
+open FSharp.Control.Tasks.Affine
+open FSharp.Core
+
+// Lock guards access to a wrapped value, it's not possible to access it
+// without acquiring a read or write access.
+use lock = RWLock.reentrant 100
+let doSomething (cancel: CancellationToken) = vtask {
+    // in order to read value, you must first obtain read lock handle
+    // which implements Disposable, so it can be released safely
+    // multiple readers are allowed to hold a lock at the same time
+    use! reader = lock.Read(cancel)
+    printfn "R: %i" reader.Value
+
+    // Readers are allowed to be upgraded into write handles. When write
+    // handle is hold, no other active writers OR readers can hold a lock.
+    // Another way to obtain write handle: `lock.Write(cancel)`
+    use! writer = reader.Upgrade(cancel)
+    let mutable w = writer // this is required, since F# doesn't have `use! mutable` syntax
+    w.Value <- w.Value + 1 // only writer has Value setter
+    
+    // since combined with `use!`, both handles will be automatically 
+    // released at the end of the scope
+}
+```
+
 ### Vec
 
 `Vec<'a>` or `'a vec` is a persistent immutable data type, which provides a fairly fast add/remove operations (which append value to the tail of the collection as oposed to list), which are *O(log32(n))* (which for an in-memory data structure is effectivelly close to *O(1)*). It's also optimized for `for` loop traversals which are close in speed to native array.
