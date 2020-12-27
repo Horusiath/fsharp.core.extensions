@@ -111,7 +111,7 @@ type UnboundedActor<'msg>() =
          else
             this.TryComplete() |> ignore
             ValueTask(promise.Task)
-    
+
     member private this.Interrupt(e: exn) =
         Interlocked.Exchange(&this.status, ActorStatus.WriteClosed) |> ignore
         cts.Cancel()

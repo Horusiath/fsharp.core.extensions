@@ -91,7 +91,12 @@ and [<Sealed>] GrpcConnection(channel: Grpc.Core.Channel, response: AsyncServerS
     let completed = TaskCompletionSource<unit>()
     let getEnumerator cancel =
         { new IAsyncEnumerator<EndpointMessage> with
-            member this.MoveNextAsync() = ValueTask<bool>(response.ResponseStream.MoveNext(cancel))
+            member this.MoveNextAsync() = vtask {
+                try
+                    return! response.ResponseStream.MoveNext(cancel)
+                with
+                | :? Grpc.Core.RpcException as e when e.Status.StatusCode = StatusCode.Cancelled -> return false
+            }
             member this.Current = response.ResponseStream.Current
             member this.DisposeAsync() = ValueTask() }
     let incoming = { new IAsyncEnumerable<_> with member _.GetAsyncEnumerator(cancel) = getEnumerator cancel }

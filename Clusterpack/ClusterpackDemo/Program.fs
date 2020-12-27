@@ -17,6 +17,7 @@ let run (cancel: CancellationToken) = unitVtask {
     
     // connect two nodes together - returns nodeId of node B
     let! _ = a.Connect("127.0.0.1:10002", cancel)
+    printfn "Connected"
     
     // create a System.Threading.Channel<string> and wrap it using node A
     let (writer, reader) = Channel.boundedMpsc 100
@@ -28,6 +29,7 @@ let run (cancel: CancellationToken) = unitVtask {
     match b.Proxy(local.Address) with
     | None -> printfn "Proxy to '%O' failed. Nodes are not connected." local.Address
     | Some remote ->
+        do! a.DisposeAsync()
         // send message to channel "living" on node A via remote proxy from node B
         do! remote.WriteAsync("Hello from remote!")
     

@@ -47,6 +47,10 @@ module Task =
             t.ContinueWith(Func<Task<'a>, 'b>(fun t -> f t.Result), TaskContinuationOptions.ExecuteSynchronously|||TaskContinuationOptions.NotOnCanceled|||TaskContinuationOptions.NotOnFaulted)
         elif t.IsCompletedSuccessfully then Task.FromResult(f t.Result)
         else Task.FromException<'b>(if isNull t.Exception then TaskCanceledException(t) :> exn else upcast t.Exception)
+    
+    /// Executes given function whenever a task finished with an error. 
+    let rescue (f: exn -> 'b) (t: Task<'a>) : Task<'b> =
+        t.ContinueWith(Func<Task<'a>, 'b>(fun t -> f t.Exception), TaskContinuationOptions.ExecuteSynchronously|||TaskContinuationOptions.NotOnCanceled|||TaskContinuationOptions.OnlyOnFaulted)
         
     /// Converts task's exception channel into Error case of returned Result type.
     let secure (t: Task<'a>) : Task<Result<'a,exn>> = task {

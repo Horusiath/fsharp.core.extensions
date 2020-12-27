@@ -10,6 +10,10 @@
         <Compile Include="Node.fs" />
         <Compile Include="GrpcTransport.fs" />
         <Compile Include="TestTransport.fs" />
+        <Compile Include="Raft\Prolog.fs" />
+        <Compile Include="Raft\Replication.fs" />
+        <Compile Include="Raft\Election.fs" />
+        <Compile Include="Raft\Raft.fs" />
     </ItemGroup>
 
     <ItemGroup>
