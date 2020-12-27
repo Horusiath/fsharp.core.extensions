@@ -103,14 +103,15 @@ open FSharp.Core
 // without acquiring a read or write access.
 use lock = RWLock.reentrant 100
 let doSomething (cancel: CancellationToken) = vtask {
-    // in order to read value, you must first obtain read lock handle
-    // which implements Disposable, so it can be released safely
-    // multiple readers are allowed to hold a lock at the same time
+    // In order to read value, you must first obtain read or write lock handle
+    // which implement Disposable, so they can be released safely.
+    // Multiple readers are allowed to hold a lock at the same time
     use! reader = lock.Read(cancel)
     printfn "R: %i" reader.Value
 
     // Readers are allowed to be upgraded into write handles. When write
-    // handle is hold, no other active writers OR readers can hold a lock.
+    // handle is hold, no other task is allowed to hold writers OR readers
+    // (however the same task is still allowed to have them).
     // Another way to obtain write handle: `lock.Write(cancel)`
     use! writer = reader.Upgrade(cancel)
     let mutable w = writer // this is required, since F# doesn't have `use! mutable` syntax
