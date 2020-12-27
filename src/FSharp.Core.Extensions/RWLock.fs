@@ -111,6 +111,9 @@ type internal LockAwaiter<'h> private() =
     member this.Reset(handle: 'h, token: int16, cancellationToken: CancellationToken) =
         if cancellationToken.IsCancellationRequested then
             this.status <- ValueTaskSourceStatus.Canceled
+            //TODO: if cancellation token can be cancelled, we should probably register callback
+            // right now cancellation tokens are only checked on acquire/release locks, so in case
+            // of deadlock cancellation may never be respected
         else
             this.status <- ValueTaskSourceStatus.Pending
         this.handle <- handle
@@ -292,6 +295,7 @@ and [<Sealed; NoComparison; NoEquality>] RWLock<'a>(initialValue: 'a) =
                     if Atomic.cas old { old with LockState = updated; AwaitingWriters = writers } state then
                         awaiter.Complete(true)
                         for c in cancelled do c.Complete(false)
+                        //TODO: when it's safe to release awaiter back to the pool?
                     else attempt state id
         attempt state id
     member internal this.ReleaseWrite(id: int) =
@@ -374,6 +378,7 @@ and [<Struct; NoComparison; NoEquality>] WriteHandle<'a> internal(lock: RWLock<'
     
 and [<Struct; IsReadOnly; NoComparison; NoEquality>] ReadHandle<'a> internal(lock: RWLock<'a>, lockId: int) =
     member this.LockId: int = lockId
+    //TODO: maybe Value should return inref, to prevent it from being closure-captured between tasks (outside of lock jurisdiction)?  
     member this.Value with [<MethodImpl(MethodImplOptions.AggressiveInlining)>] get () = lock.GetValue()
     
     /// Upgrades current read lock into write lock, returning new (writable) lock handle.
