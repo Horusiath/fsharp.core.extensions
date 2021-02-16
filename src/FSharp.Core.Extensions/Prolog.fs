@@ -18,6 +18,7 @@ module FSharp.Core.Operators
 
 open System
 open System.Collections.Generic
+open System.Runtime.ExceptionServices
 
 /// An operator over an implicit cast operation betwen two types.
 let inline (!%) (x:^a) : ^b = ((^a or ^b) : (static member op_Implicit : ^a -> ^b) x)  
@@ -74,3 +75,15 @@ module Map =
             if ok then
                 m <- Map.add key (fn key aval bval) m
         m
+
+[<RequireQualifiedAccess>]
+module Result =
+        
+    /// Unwraps value from the Result if it was Ok. In case of Error,
+    /// the underlying exception is being rethrown with preserved stack trace.
+    let inline unwrap (r: Result<'t, #exn>) =
+        match r with
+        | Ok value  -> value
+        | Error err ->
+            ExceptionDispatchInfo.Capture(err).Throw()
+            Unchecked.defaultof<'t>

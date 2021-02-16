@@ -16,6 +16,7 @@
     <Compile Include="ScheduleTests.fs" />
     <Compile Include="ActorTests.fs" />
     <Compile Include="RWLockTests.fs" />
+    <Compile Include="AsyncExtensionsTests.fs" />
     <Compile Include="Main.fs" />
   </ItemGroup>
   <ItemGroup>
