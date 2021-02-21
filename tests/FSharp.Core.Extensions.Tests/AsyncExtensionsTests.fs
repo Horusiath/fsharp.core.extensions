@@ -118,9 +118,9 @@ type UserWithOrders =
 [<Tests>]
 let tests = ftestList "AsyncBatch" [
     testAsync "should reuse once resolved values" {
-        let! ctx = AsyncBatch.context
+        let ctx = AsyncBatch.context ()
         let mutable counter = 0
-        let source = AsyncBatch (ctx, fun ids -> async {
+        let source = AsyncBatch.create ctx (fun ids -> async {
             counter <- counter + 1
             do! Async.Sleep 10
             return ids |> Seq.map (fun i -> (i, i+1)) |> Map.ofSeq
@@ -143,9 +143,9 @@ let tests = ftestList "AsyncBatch" [
     }
     
     testAsync "resolve function should be called only once per parallel request" {
-        let! ctx = AsyncBatch.context
+        let ctx = AsyncBatch.context ()
         let mutable counter = 0
-        let source = AsyncBatch (ctx, fun ids -> async {
+        let source = AsyncBatch.create ctx (fun ids -> async {
             counter <- counter + 1
             do! Async.Sleep 10
             return ids |> Seq.map (fun i -> (i, i+1)) |> Map.ofSeq
@@ -185,11 +185,11 @@ let tests = ftestList "AsyncBatch" [
         let ctx2 = AsyncBatchContext() // context used by orders data loader
         let mutable c1 = 0
         let mutable c2 = 0
-        let users = AsyncBatch (ctx1, fun ids -> async {
+        let users = AsyncBatch.create ctx1 (fun ids -> async {
             c1 <- c1 + 1
             return ids |> Seq.map (fun i -> i, Map.find i usersIndex) |> Map.ofSeq
         })
-        let orders = AsyncBatch (ctx2, fun ids -> async {
+        let orders = AsyncBatch.create ctx2 (fun ids -> async {
             c2 <- c2 + 1
             return ids |> Seq.map (fun i -> i, Map.find i ordersIndex) |> Map.ofSeq
         })

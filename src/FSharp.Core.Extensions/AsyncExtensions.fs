@@ -276,11 +276,7 @@ type AsyncBatch<'id, 'value when 'id: comparison>(sync: AsyncBatchContext, fetch
     
 [<RequireQualifiedAccess>]        
 module AsyncBatch =
-    let context = async {
-        let ctx = AsyncBatchContext()
-        do! Async.SwitchToContext ctx
-        return ctx
-    }
+    let inline context () = AsyncBatchContext()
     
     let inline create (context: AsyncBatchContext) (batchFn) = AsyncBatch<_,_>(context, batchFn)
     
