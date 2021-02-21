@@ -185,3 +185,103 @@ module MVar =
     /// Clears the last resolved value and returns it. All incoming reads will be blocked asynchronously
     /// and awaited until a new value will be written again.
     let inline clear (v: MVar<'t>) : 't option = v.Clear()
+   
+[<AllowNullLiteral>] 
+type internal ICommittable =
+    abstract Commit: unit -> unit
+ 
+open System.Collections.Generic
+open FSharp.Core.Operators
+    
+/// Synchronization context, that's supposed to take care of `AsyncBatch` parallel requests. Non-cached calls from
+/// `AsyncBatch.GetAsync` are enqueued separately onto pending queue, which is picking them and committing one by one.
+/// Once committing `AsyncBatch` completes it's fetch function, it signals its status using Done method.
+[<Sealed>]
+type AsyncBatchContext() =
+    inherit SynchronizationContext()
+    let syncRoot = obj()
+    /// Currently executing batch.
+    let mutable atWork: ICommittable = null
+    /// List of pending batches to be commited, once `atWork` one is done.
+    let pending = Queue<ICommittable>()
+    
+    /// Try to commit next batch from the `pending` queue, but only if none batch is currently executing.
+    let rec next () =
+        if isNull atWork && pending.TryDequeue(&atWork) then
+            atWork.Commit()
+            next ()   
+    override this.Post(job: SendOrPostCallback, state: obj) =        
+        job.Invoke(state)
+        this.TryCommitNext()
+    override this.Send(job, state) = this.Post(job, state)
+    member internal this.Enqueue(commit: ICommittable) =        
+        pending.Enqueue commit
+    member internal this.Done() = lock syncRoot (fun () ->        
+        atWork <- null
+        next ())
+    member internal this.TryCommitNext () =    
+        lock syncRoot (fun () -> next ())
+
+[<Sealed>]
+type AsyncBatch<'id, 'value when 'id: comparison>(sync: AsyncBatchContext, fetchFn: Set<'id> -> Async<Map<'id, 'value>>) as this =
+    let syncRoot = obj()
+    /// key-value pairs cached from previous calls to `fetchFn`
+    let mutable cache: Map<'id, Async<'value>> = Map.empty
+    /// Current batch of keys to be send to `fetchFn`. It contains keys not present in `cache`.
+    let mutable batch: Set<'id> = Set.empty
+    /// Currently executing promise.
+    let mutable fetching: IVar<Result<Map<'id,'value>, exn>> = IVar.empty ()
+    /// Asynchronously retrieves a value for a given key. When multiple GetAsync results are awaited in parallel, they
+    /// are being batched together and retrieved using a single `fetchFn` call.
+    member this.GetAsync(key: 'id): Async<'value> =
+        lock syncRoot (fun () ->
+            match cache.TryGetValue key with
+            | true, value -> value
+            | false, _ -> 
+                batch <- Set.add key batch
+                sync.Enqueue this
+                let promise = fetching.Value
+                let value =
+                    async {
+                        do! Async.SwitchToContext sync
+                        let! result = promise        
+                        let value = Map.find key (Result.unwrap result)
+                        return value
+                    }
+                cache <- Map.add key value cache
+                value
+        )
+    interface ICommittable with
+        member this.Commit() =
+            // we need to retrieve 
+            let keys, fetching =
+                lock syncRoot (fun () ->
+                    let fetching = Interlocked.Exchange(&fetching, IVar.empty())
+                    let keys = Interlocked.Exchange(&batch, Set.empty)
+                    (keys, fetching))
+            if Set.isEmpty keys
+            then sync.Done() //TODO: check if this won't deadlock in AsyncBatchContext
+            else
+                Async.Start(async {
+                    try
+                        try
+                            // call fetchFn on the batch of items and resolve the promise
+                            let! batchResult = fetchFn keys
+                            fetching.Write (Ok batchResult) |> ignore
+                        with e ->
+                            fetching.Write (Error e) |> ignore
+                    finally
+                        sync.Done ()
+                })
+    
+[<RequireQualifiedAccess>]        
+module AsyncBatch =
+    let context = async {
+        let ctx = AsyncBatchContext()
+        do! Async.SwitchToContext ctx
+        return ctx
+    }
+    
+    let inline create (context: AsyncBatchContext) (batchFn) = AsyncBatch<_,_>(context, batchFn)
+    
+    let inline get (key: 'k) (batch: AsyncBatch<'k,'v>) : Async<'v> = batch.GetAsync(key)

@@ -20,7 +20,10 @@ This library contains a set of utilities to support building efficient, concurre
     - `~%` operator as equivalent of `op_Implicit` cast.
     - `=>` which creates a KeyValuePair out of its parameters.
     - `*` multiply operator for `TimeSpan`.  
-- [x] `AsyncSeq` module which enables dozens of operators over `IAsyncEnumerable<'a>` interface, including element transformation, adding time dimensions, stream joining and splitting:
+- [x] `AsyncSeq` module which enables dozens of operators over `IAsyncEnumerable<'a>` interface, including element transformation, adding time dimensions, stream joining and splitting.
+- [x] F# Async extensions: 
+    - Functional `TaskCompletionSource<>` equivalents `IVar` (completable once) and `MVar` (completable multiple times), both using thread-safe methods.
+    - `AsyncBatch` which enables convenient batch processing of isolated parallel requests. Useful i.e. in GraphQL expressions.
 
 ## API
 
