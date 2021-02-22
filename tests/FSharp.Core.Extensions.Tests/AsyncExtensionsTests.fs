@@ -116,11 +116,11 @@ type UserWithOrders =
       Orders: Order[] }
 
 [<Tests>]
-let tests = ftestList "AsyncBatch" [
+let tests = ftestList "DataLoader" [
     testAsync "should reuse once resolved values" {
-        let ctx = AsyncBatch.context ()
+        let ctx = DataLoader.context ()
         let mutable counter = 0
-        let source = AsyncBatch.create ctx (fun ids -> async {
+        let source = DataLoader.create ctx (fun ids -> async {
             counter <- counter + 1
             do! Async.Sleep 10
             return ids |> Seq.map (fun i -> (i, i+1)) |> Map.ofSeq
@@ -143,9 +143,9 @@ let tests = ftestList "AsyncBatch" [
     }
     
     testAsync "resolve function should be called only once per parallel request" {
-        let ctx = AsyncBatch.context ()
+        let ctx = DataLoader.context ()
         let mutable counter = 0
-        let source = AsyncBatch.create ctx (fun ids -> async {
+        let source = DataLoader.create ctx (fun ids -> async {
             counter <- counter + 1
             do! Async.Sleep 10
             return ids |> Seq.map (fun i -> (i, i+1)) |> Map.ofSeq
@@ -181,15 +181,15 @@ let tests = ftestList "AsyncBatch" [
             3, { Id = 3; BuyerId = 2; Name = "Vuvuzela" }
         ]
         
-        let ctx1 = AsyncBatchContext() // context used by users data loader
-        let ctx2 = AsyncBatchContext() // context used by orders data loader
+        let ctx1 = DataLoaderContext() // context used by users data loader
+        let ctx2 = DataLoaderContext() // context used by orders data loader
         let mutable c1 = 0
         let mutable c2 = 0
-        let users = AsyncBatch.create ctx1 (fun ids -> async {
+        let users = DataLoader.create ctx1 (fun ids -> async {
             c1 <- c1 + 1
             return ids |> Seq.map (fun i -> i, Map.find i usersIndex) |> Map.ofSeq
         })
-        let orders = AsyncBatch.create ctx2 (fun ids -> async {
+        let orders = DataLoader.create ctx2 (fun ids -> async {
             c2 <- c2 + 1
             return ids |> Seq.map (fun i -> i, Map.find i ordersIndex) |> Map.ofSeq
         })

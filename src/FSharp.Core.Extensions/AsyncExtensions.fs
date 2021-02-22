@@ -193,11 +193,11 @@ type internal ICommittable =
 open System.Collections.Generic
 open FSharp.Core.Operators
     
-/// Synchronization context, that's supposed to take care of `AsyncBatch` parallel requests. Non-cached calls from
-/// `AsyncBatch.GetAsync` are enqueued separately onto pending queue, which is picking them and committing one by one.
-/// Once committing `AsyncBatch` completes it's fetch function, it signals its status using Done method.
+/// Synchronization context, that's supposed to take care of `DataLoader` parallel requests. Non-cached calls from
+/// `DataLoader.GetAsync` are enqueued separately onto pending queue, which is picking them and committing one by one.
+/// Once committing `DataLoader` completes it's fetch function, it signals its status using Done method.
 [<Sealed>]
-type AsyncBatchContext() =
+type DataLoaderContext() =
     inherit SynchronizationContext()
     let syncRoot = obj()
     /// Currently executing batch.
@@ -223,7 +223,7 @@ type AsyncBatchContext() =
         lock syncRoot (fun () -> next ())
 
 [<Sealed>]
-type AsyncBatch<'id, 'value when 'id: comparison>(sync: AsyncBatchContext, fetchFn: Set<'id> -> Async<Map<'id, 'value>>) as this =
+type DataLoader<'id, 'value when 'id: comparison>(sync: DataLoaderContext, fetchFn: Set<'id> -> Async<Map<'id, 'value>>) as this =
     let syncRoot = obj()
     /// key-value pairs cached from previous calls to `fetchFn`
     let mutable cache: Map<'id, Async<'value>> = Map.empty
@@ -260,7 +260,7 @@ type AsyncBatch<'id, 'value when 'id: comparison>(sync: AsyncBatchContext, fetch
                     let keys = Interlocked.Exchange(&batch, Set.empty)
                     (keys, fetching))
             if Set.isEmpty keys
-            then sync.Done() //TODO: check if this won't deadlock in AsyncBatchContext
+            then sync.Done() //TODO: check if this won't deadlock in DataLoaderContext
             else
                 Async.Start(async {
                     try
@@ -275,9 +275,10 @@ type AsyncBatch<'id, 'value when 'id: comparison>(sync: AsyncBatchContext, fetch
                 })
     
 [<RequireQualifiedAccess>]        
-module AsyncBatch =
-    let inline context () = AsyncBatchContext()
+module DataLoader =
     
-    let inline create (context: AsyncBatchContext) (batchFn) = AsyncBatch<_,_>(context, batchFn)
+    let inline context () = DataLoaderContext()
     
-    let inline get (key: 'k) (batch: AsyncBatch<'k,'v>) : Async<'v> = batch.GetAsync(key)
+    let inline create (context: DataLoaderContext) (batchFn) = DataLoader<_,_>(context, batchFn)
+    
+    let inline get (key: 'k) (batch: DataLoader<'k,'v>) : Async<'v> = batch.GetAsync(key)
