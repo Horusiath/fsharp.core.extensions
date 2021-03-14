@@ -30,7 +30,7 @@ open System
 [<RequireQualifiedAccess>]
 module Hlc =
     
-    let [<Literal>] private MASK = 0xffL    
+    let [<Literal>] private MASK = 0xffffL    
     let mutable private osTime = fun () -> DateTime.UtcNow.Ticks &&& ~~~MASK
     let mutable private highest = atom (osTime())
     let private getTime = fun t -> Math.Max(osTime (), t+1L)
