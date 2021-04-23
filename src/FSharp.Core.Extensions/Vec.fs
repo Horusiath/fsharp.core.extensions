@@ -583,7 +583,7 @@ module Vec =
     /// which takes an index (0-based) from which an element will be created.
     [<CompiledName("Init")>]
     let init (size: int) (fn: int -> 'a): Vec<'a> =
-        let t = empty.AsBuilder()
+        let mutable t = empty.AsBuilder()
         for i = 0 to size - 1 do
             t.Add (fn i)
         t.ToImmutable()
