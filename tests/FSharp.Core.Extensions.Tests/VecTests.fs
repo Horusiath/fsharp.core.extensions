@@ -135,4 +135,8 @@ let tests =
             let expected = Array.init 100 (fun i -> i+10)
             Expect.equal actual expected "Vec.append should be able to append many elements"
             
+        testCase "should init a vector with specified size" <| fun _ ->
+            let v = Vec.init 10 id
+            Expect.equal v.Count 10 "Vec.init should initialize with specified size"
+
     ]
