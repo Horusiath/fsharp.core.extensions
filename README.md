@@ -84,14 +84,21 @@ Here's the performance check of given operations - the operation is about gettin
 - *Mutex* which uses `Mutex` as a tool of control.
 - *SemaphoreSlim* which uses `SemaphoreSlim` - an optimized variant of mutex/semaphore.
 
-|          Method |        Mean |     Error |    StdDev |  Ratio | RatioSD | Gen 0 | Gen 1 | Gen 2 | Allocated |
-|---------------- |------------:|----------:|----------:|-------:|--------:|------:|------:|------:|----------:|
-| InterlockedLoop |    16.03 ns |  0.078 ns |  0.069 ns |   1.00 |    0.00 |     - |     - |     - |         - |
-|    AtomicUpdate |    16.11 ns |  0.106 ns |  0.099 ns |   1.00 |    0.01 |     - |     - |     - |         - |
-|      ObjectLock |    36.18 ns |  0.204 ns |  0.190 ns |   2.26 |    0.01 |     - |     - |     - |         - |
-|           Mutex | 3,225.95 ns | 29.755 ns | 24.847 ns | 201.37 |    1.95 |     - |     - |     - |         - |
-|   SemaphoreSlim |   103.32 ns |  0.965 ns |  0.903 ns |   6.45 |    0.06 |     - |     - |     - |         - |
+```ini
+BenchmarkDotNet=v0.12.1, OS=Windows 10.0.19043
+AMD Ryzen 9 3950X, 1 CPU, 32 logical and 16 physical cores
+.NET Core SDK=5.0.301
+[Host]     : .NET Core 5.0.7 (CoreCLR 5.0.721.25508, CoreFX 5.0.721.25508), X64 RyuJIT DEBUG
+DefaultJob : .NET Core 5.0.7 (CoreCLR 5.0.721.25508, CoreFX 5.0.721.25508), X64 RyuJIT
+```
 
+|          Method |       Mean |     Error |    StdDev |  Ratio | RatioSD | Gen 0 | Gen 1 | Gen 2 | Allocated |
+|---------------- |-----------:|----------:|----------:|-------:|--------:|------:|------:|------:|----------:|
+| InterlockedLoop |   3.111 ns | 0.0719 ns | 0.0673 ns |   1.00 |    0.00 |     - |     - |     - |         - |
+|    AtomicUpdate |   3.192 ns | 0.0487 ns | 0.0456 ns |   1.03 |    0.03 |     - |     - |     - |         - |
+|      ObjectLock |   8.830 ns | 0.0790 ns | 0.0739 ns |   2.84 |    0.07 |     - |     - |     - |         - |
+|           Mutex | 438.290 ns | 1.9435 ns | 1.8180 ns | 140.92 |    2.88 |     - |     - |     - |         - |
+|   SemaphoreSlim |  23.639 ns | 0.0370 ns | 0.0328 ns |   7.60 |    0.17 |     - |     - |     - |         - |
 
 ### RWLock
 
@@ -203,31 +210,39 @@ Here, we're appending elements one by one in a loop of 1, 100, 1000 and 10 000 i
 - *VecAppend* which is a immutable vector as implemented by this library. 
 - *FSharpxVectorAppend* represents a `PersistentVector<'a>` from [FSharpx.Collections](https://github.com/fsprojects/FSharpx.Collections), which is another implementation of the same data structure as the one implemented here. 
 
-|               Method | to_append |             Mean |          Error |         StdDev |           Median |  Ratio | RatioSD |       Gen 0 |    Gen 1 |   Gen 2 |   Allocated |
-|--------------------- |---------- |-----------------:|---------------:|---------------:|-----------------:|-------:|--------:|------------:|---------:|--------:|------------:|
-|    MutableListAppend |         1 |         26.95 ns |       1.407 ns |       4.038 ns |         25.33 ns |   1.00 |    0.00 |      0.0421 |        - |       - |        88 B |
-|  ImmutableListAppend |         1 |         45.65 ns |       0.992 ns |       1.018 ns |         45.61 ns |   1.96 |    0.13 |      0.0344 |        - |       - |        72 B |
-| ImmutableArrayAppend |         1 |         14.25 ns |       0.319 ns |       0.425 ns |         14.11 ns |   0.58 |    0.08 |      0.0153 |        - |       - |        32 B |
-|  FSharpxVectorAppend |         1 |        177.47 ns |       5.538 ns |      16.328 ns |        174.50 ns |   6.79 |    1.35 |      0.2561 |        - |       - |       536 B |
-|            VecAppend |         1 |         38.02 ns |       0.848 ns |       1.712 ns |         37.23 ns |   1.54 |    0.17 |      0.0343 |        - |       - |        72 B |
-|                      |           |                  |                |                |                  |        |         |             |          |         |             |
-|    MutableListAppend |       100 |        689.72 ns |       4.335 ns |       4.055 ns |        690.22 ns |   1.00 |    0.00 |      1.0481 |        - |       - |      2192 B |
-|  ImmutableListAppend |       100 |     17,839.33 ns |     115.082 ns |      96.099 ns |     17,837.45 ns |  25.86 |    0.16 |     16.5710 |        - |       - |     34704 B |
-| ImmutableArrayAppend |       100 |      5,690.08 ns |     112.959 ns |     150.797 ns |      5,615.92 ns |   8.32 |    0.29 |     20.4620 |        - |       - |     42800 B |
-|  FSharpxVectorAppend |       100 |      6,491.06 ns |     129.398 ns |     108.053 ns |      6,476.84 ns |   9.41 |    0.17 |     12.1002 |        - |       - |     25304 B |
-|            VecAppend |       100 |      5,610.23 ns |      91.306 ns |      85.407 ns |      5,577.25 ns |   8.13 |    0.13 |      9.6283 |        - |       - |     20136 B |
-|                      |           |                  |                |                |                  |        |         |             |          |         |             |
-|    MutableListAppend |      1000 |      4,653.65 ns |      68.112 ns |      63.712 ns |      4,649.60 ns |   1.00 |    0.00 |      7.9346 |        - |       - |     16600 B |
-|  ImmutableListAppend |      1000 |    341,368.64 ns |   6,736.781 ns |   8,759.719 ns |    340,537.92 ns |  74.03 |    1.67 |    240.2344 |        - |       - |    502896 B |
-| ImmutableArrayAppend |      1000 |    380,422.74 ns |   8,284.896 ns |  23,637.275 ns |    368,581.81 ns |  83.57 |    5.28 |   1922.8516 |        - |       - |   4028000 B |
-|  FSharpxVectorAppend |      1000 |     70,497.83 ns |     964.505 ns |     902.198 ns |     70,390.37 ns |  15.15 |    0.22 |    121.0938 |        - |       - |    253320 B |
-|            VecAppend |      1000 |     61,596.14 ns |   1,686.168 ns |   2,523.776 ns |     60,990.33 ns |  13.28 |    0.63 |     98.1445 |        - |       - |    205400 B |
-|                      |           |                  |                |                |                  |        |         |             |          |         |             |
-|    MutableListAppend |     10000 |    144,939.65 ns |   3,632.198 ns |   3,219.849 ns |    143,854.16 ns |   1.00 |    0.00 |     82.5195 |  41.5039 | 41.5039 |    262456 B |
-|  ImmutableListAppend |     10000 |  5,822,711.41 ns |  51,205.254 ns |  47,897.426 ns |  5,831,860.16 ns |  40.16 |    0.92 |   1070.3125 | 281.2500 | 39.0625 |   6653616 B |
-| ImmutableArrayAppend |     10000 | 40,742,758.37 ns | 762,077.943 ns | 782,597.940 ns | 40,635,738.46 ns | 281.91 |    9.14 | 188538.4615 |        - |       - | 400280000 B |
-|  FSharpxVectorAppend |     10000 |  1,124,129.70 ns |  15,587.402 ns |  14,580.466 ns |  1,119,198.63 ns |   7.75 |    0.19 |   1087.8906 | 220.7031 |  1.9531 |   2624120 B |
-|            VecAppend |     10000 |    962,364.54 ns |  18,915.218 ns |  15,795.064 ns |    963,077.54 ns |   6.64 |    0.22 |    881.8359 | 164.0625 |  3.9063 |   2146433 B |
+```ini
+BenchmarkDotNet=v0.12.1, OS=Windows 10.0.19043
+AMD Ryzen 9 3950X, 1 CPU, 32 logical and 16 physical cores
+.NET Core SDK=5.0.301
+[Host]     : .NET Core 5.0.7 (CoreCLR 5.0.721.25508, CoreFX 5.0.721.25508), X64 RyuJIT DEBUG
+DefaultJob : .NET Core 5.0.7 (CoreCLR 5.0.721.25508, CoreFX 5.0.721.25508), X64 RyuJIT
+```
+
+|               Method | to_append |             Mean |          Error |         StdDev |  Ratio | RatioSD |      Gen 0 |     Gen 1 |   Gen 2 |   Allocated |
+|--------------------- |---------- |-----------------:|---------------:|---------------:|-------:|--------:|-----------:|----------:|--------:|------------:|
+|    MutableListAppend |         1 |         24.01 ns |       0.234 ns |       0.219 ns |   1.00 |    0.00 |     0.0105 |         - |       - |        88 B |
+|  ImmutableListAppend |         1 |         31.81 ns |       0.165 ns |       0.147 ns |   1.32 |    0.01 |     0.0086 |         - |       - |        72 B |
+| ImmutableArrayAppend |         1 |         10.82 ns |       0.050 ns |       0.044 ns |   0.45 |    0.00 |     0.0038 |         - |       - |        32 B |
+|  FSharpxVectorAppend |         1 |        138.81 ns |       0.491 ns |       0.460 ns |   5.78 |    0.06 |     0.0640 |    0.0001 |       - |       536 B |
+|            VecAppend |         1 |         31.74 ns |       0.286 ns |       0.267 ns |   1.32 |    0.02 |     0.0086 |         - |       - |        72 B |
+|                      |           |                  |                |                |        |         |            |           |         |             |
+|    MutableListAppend |       100 |        582.76 ns |       6.361 ns |       5.312 ns |   1.00 |    0.00 |     0.2618 |    0.0024 |       - |      2192 B |
+|  ImmutableListAppend |       100 |     16,342.72 ns |     117.443 ns |      98.070 ns |  28.05 |    0.36 |     4.1351 |    0.1068 |       - |     34704 B |
+| ImmutableArrayAppend |       100 |      6,002.86 ns |     118.309 ns |     165.853 ns |  10.39 |    0.25 |     5.1155 |    0.0114 |       - |     42800 B |
+|  FSharpxVectorAppend |       100 |      5,926.07 ns |     117.629 ns |     130.744 ns |  10.24 |    0.30 |     3.0212 |    0.0229 |       - |     25304 B |
+|            VecAppend |       100 |      4,855.78 ns |      13.802 ns |      12.910 ns |   8.33 |    0.08 |     2.4033 |    0.0153 |       - |     20136 B |
+|                      |           |                  |                |                |        |         |            |           |         |             |
+|    MutableListAppend |      1000 |      4,483.57 ns |      13.701 ns |      12.146 ns |   1.00 |    0.00 |     1.9836 |    0.1221 |       - |     16600 B |
+|  ImmutableListAppend |      1000 |    253,531.53 ns |     795.365 ns |     705.070 ns |  56.55 |    0.28 |    60.0586 |   11.7188 |       - |    502896 B |
+| ImmutableArrayAppend |      1000 |    445,113.89 ns |     734.748 ns |     687.284 ns |  99.28 |    0.36 |   481.2012 |    9.2773 |       - |   4028000 B |
+|  FSharpxVectorAppend |      1000 |     56,181.22 ns |     570.053 ns |     533.228 ns |  12.54 |    0.13 |    30.2734 |    1.5869 |       - |    253320 B |
+|            VecAppend |      1000 |     49,773.56 ns |     277.159 ns |     259.255 ns |  11.10 |    0.07 |    24.5361 |    1.2817 |       - |    205400 B |
+|                      |           |                  |                |                |        |         |            |           |         |             |
+|    MutableListAppend |     10000 |     78,526.62 ns |     487.892 ns |     456.375 ns |   1.00 |    0.00 |    41.6260 |   41.6260 | 41.6260 |    262456 B |
+|  ImmutableListAppend |     10000 |  4,097,281.84 ns |  18,994.301 ns |  16,837.953 ns |  52.17 |    0.41 |   792.9688 |  296.8750 | 31.2500 |   6653616 B |
+| ImmutableArrayAppend |     10000 | 34,045,578.54 ns | 109,326.205 ns | 102,263.800 ns | 433.57 |    2.48 | 47593.7500 | 7281.2500 |       - | 400280002 B |
+|  FSharpxVectorAppend |     10000 |    617,216.00 ns |   4,030.169 ns |   3,769.823 ns |   7.86 |    0.08 |   313.4766 |   97.6563 |       - |   2624120 B |
+|            VecAppend |     10000 |    561,254.52 ns |   8,496.611 ns |   7,947.735 ns |   7.15 |    0.13 |   256.3477 |   79.1016 |       - |   2146432 B |
 
 Note: since FSharpx implementation internally represents stored elements as `obj`, in case of value types there's an additional cost related to boxing.
 
@@ -241,25 +256,33 @@ Here, we're iterating over 10, 1000 and 200 000 elements of the collections in a
 - *VecEnumerate* which is a immutable vector as implemented by this library. 
 - *FSharpxVectorEnumerate* represents a `PersistentVector<'a>` from [FSharpx.Collections](https://github.com/fsprojects/FSharpx.Collections), which is another implementation of the same data structure as the one implemented here.
 
-|                  Method |  count |             Mean |          Error |         StdDev |           Median | Ratio | RatioSD |  Gen 0 | Gen 1 | Gen 2 | Allocated |
-|------------------------ |------- |-----------------:|---------------:|---------------:|-----------------:|------:|--------:|-------:|------:|------:|----------:|
-|    MutableListEnumerate |     10 |         52.33 ns |       0.536 ns |       0.501 ns |         52.34 ns |  1.00 |    0.00 |      - |     - |     - |         - |
-|  ImmutableListEnumerate |     10 |        876.14 ns |      20.904 ns |      29.980 ns |        873.56 ns | 16.77 |    0.74 |      - |     - |     - |         - |
-| ImmutableArrayEnumerate |     10 |         16.33 ns |       0.391 ns |       0.327 ns |         16.32 ns |  0.31 |    0.01 |      - |     - |     - |         - |
-|  FSharpxVectorEnumerate |     10 |        315.96 ns |      19.858 ns |      58.552 ns |        331.66 ns |  4.82 |    0.31 | 0.1109 |     - |     - |     232 B |
-|            VecEnumerate |     10 |         71.13 ns |       2.137 ns |       1.999 ns |         70.47 ns |  1.36 |    0.04 |      - |     - |     - |         - |
-|                         |        |                  |                |                |                  |       |         |        |       |       |           |
-|    MutableListEnumerate |   1000 |      3,651.23 ns |     128.698 ns |     375.417 ns |      3,488.58 ns |  1.00 |    0.00 |      - |     - |     - |         - |
-|  ImmutableListEnumerate |   1000 |     67,096.30 ns |   1,327.362 ns |   3,076.364 ns |     66,223.86 ns | 17.70 |    1.48 |      - |     - |     - |         - |
-| ImmutableArrayEnumerate |   1000 |      2,047.00 ns |      13.241 ns |      12.385 ns |      2,043.86 ns |  0.50 |    0.04 |      - |     - |     - |         - |
-|  FSharpxVectorEnumerate |   1000 |     15,226.12 ns |     296.629 ns |     329.702 ns |     15,059.95 ns |  3.73 |    0.33 | 0.0916 |     - |     - |     232 B |
-|            VecEnumerate |   1000 |      4,625.08 ns |      45.560 ns |      38.045 ns |      4,614.30 ns |  1.12 |    0.09 |      - |     - |     - |         - |
-|                         |        |                  |                |                |                  |       |         |        |       |       |           |
-|    MutableListEnumerate | 200000 |    689,594.71 ns |  16,050.917 ns |  15,014.038 ns |    685,333.79 ns |  1.00 |    0.00 |      - |     - |     - |         - |
-|  ImmutableListEnumerate | 200000 | 18,099,508.62 ns | 359,991.898 ns | 774,920.537 ns | 18,345,503.91 ns | 25.27 |    1.66 |      - |     - |     - |         - |
-| ImmutableArrayEnumerate | 200000 |    482,744.71 ns |  11,278.890 ns |  31,253.750 ns |    478,121.04 ns |  0.75 |    0.05 |      - |     - |     - |         - |
-|  FSharpxVectorEnumerate | 200000 |  5,035,035.54 ns |  99,934.161 ns | 250,715.271 ns |  4,915,667.19 ns |  7.32 |    0.40 |      - |     - |     - |     232 B |
-|            VecEnumerate | 200000 |  1,114,727.52 ns |  20,929.033 ns |  23,262.565 ns |  1,115,355.66 ns |  1.61 |    0.05 |      - |     - |     - |         - |
+```ini
+BenchmarkDotNet=v0.12.1, OS=Windows 10.0.19043
+AMD Ryzen 9 3950X, 1 CPU, 32 logical and 16 physical cores
+.NET Core SDK=5.0.301
+[Host]     : .NET Core 5.0.7 (CoreCLR 5.0.721.25508, CoreFX 5.0.721.25508), X64 RyuJIT DEBUG
+DefaultJob : .NET Core 5.0.7 (CoreCLR 5.0.721.25508, CoreFX 5.0.721.25508), X64 RyuJIT
+```
+
+|                  Method |  count |             Mean |          Error |         StdDev | Ratio | RatioSD |  Gen 0 | Gen 1 | Gen 2 | Allocated |
+|------------------------ |------- |-----------------:|---------------:|---------------:|------:|--------:|-------:|------:|------:|----------:|
+|    MutableListEnumerate |     10 |        39.276 ns |      0.0803 ns |      0.0670 ns |  1.00 |    0.00 |      - |     - |     - |         - |
+|  ImmutableListEnumerate |     10 |       559.366 ns |      3.2115 ns |      2.8469 ns | 14.24 |    0.09 |      - |     - |     - |         - |
+| ImmutableArrayEnumerate |     10 |         3.944 ns |      0.0590 ns |      0.0552 ns |  0.10 |    0.00 |      - |     - |     - |         - |
+|  FSharpxVectorEnumerate |     10 |       197.010 ns |      0.8751 ns |      0.8186 ns |  5.02 |    0.02 | 0.0277 |     - |     - |     232 B |
+|            VecEnumerate |     10 |        43.809 ns |      0.4378 ns |      0.4095 ns |  1.12 |    0.01 |      - |     - |     - |         - |
+|                         |        |                  |                |                |       |         |        |       |       |           |
+|    MutableListEnumerate |   1000 |     3,204.809 ns |      7.2374 ns |      6.7698 ns |  1.00 |    0.00 |      - |     - |     - |         - |
+|  ImmutableListEnumerate |   1000 |    43,366.618 ns |    861.5367 ns |    846.1443 ns | 13.55 |    0.26 |      - |     - |     - |         - |
+| ImmutableArrayEnumerate |   1000 |       346.527 ns |      1.1570 ns |      0.9662 ns |  0.11 |    0.00 |      - |     - |     - |         - |
+|  FSharpxVectorEnumerate |   1000 |    12,570.358 ns |     12.8635 ns |     12.0325 ns |  3.92 |    0.01 | 0.0153 |     - |     - |     232 B |
+|            VecEnumerate |   1000 |     4,117.957 ns |     17.7939 ns |     16.6444 ns |  1.28 |    0.00 |      - |     - |     - |         - |
+|                         |        |                  |                |                |       |         |        |       |       |           |
+|    MutableListEnumerate | 200000 |   729,758.190 ns |  2,451.2115 ns |  2,292.8647 ns |  1.00 |    0.00 |      - |     - |     - |         - |
+|  ImmutableListEnumerate | 200000 | 8,112,826.228 ns | 33,897.5019 ns | 30,049.2525 ns | 11.12 |    0.05 |      - |     - |     - |       2 B |
+| ImmutableArrayEnumerate | 200000 |    68,341.672 ns |     99.3552 ns |     77.5700 ns |  0.09 |    0.00 |      - |     - |     - |         - |
+|  FSharpxVectorEnumerate | 200000 | 3,812,772.604 ns | 12,600.5878 ns | 11,786.5976 ns |  5.22 |    0.02 |      - |     - |     - |     233 B |
+|            VecEnumerate | 200000 |   814,029.893 ns |  2,160.2270 ns |  2,020.6776 ns |  1.12 |    0.00 |      - |     - |     - |         - |
 
 #### Building a collection out of array
 
@@ -271,13 +294,21 @@ Here, we are converting an array of 1000 elements into a final representation of
 - *VecOfArray* represents `Vec.ofArray items` - an implementation of immutable vector made in this repository.
 - *FSharpxVecOfArray* represents a `PersistentVector.ofSeq items` from [FSharpx.Collections](https://github.com/fsprojects/FSharpx.Collections), which is another implementation of the same data structure as the one implemented here.
 
-|               Method |      Mean |     Error |    StdDev |   Gen 0 | Gen 1 | Gen 2 | Allocated |
-|--------------------- |----------:|----------:|----------:|--------:|------:|------:|----------:|
-|   ResizeArrayOfArray |  1.580 us | 0.0318 us | 0.0390 us |  3.8452 |     - |     - |   7.87 KB |
-| ImmutableListOfArray | 62.571 us | 1.2125 us | 1.7389 us | 22.9492 |     - |     - |  46.92 KB |
-|    FSharpListOfArray | 20.699 us | 0.4118 us | 0.4406 us | 15.2893 |     - |     - |  31.25 KB |
-|    FSharpxVecOfArray | 85.473 us | 5.5849 us | 8.0098 us |  5.0049 |     - |     - |  10.26 KB |
-|           VecOfArray | 11.720 us | 0.2322 us | 0.3020 us |  9.3536 |     - |     - |   19.1 KB |
+```ini
+BenchmarkDotNet=v0.12.1, OS=Windows 10.0.19043
+AMD Ryzen 9 3950X, 1 CPU, 32 logical and 16 physical cores
+.NET Core SDK=5.0.301
+[Host]     : .NET Core 5.0.7 (CoreCLR 5.0.721.25508, CoreFX 5.0.721.25508), X64 RyuJIT DEBUG
+DefaultJob : .NET Core 5.0.7 (CoreCLR 5.0.721.25508, CoreFX 5.0.721.25508), X64 RyuJIT
+```
+
+|               Method |        Mean |     Error |    StdDev |  Gen 0 |  Gen 1 | Gen 2 | Allocated |
+|--------------------- |------------:|----------:|----------:|-------:|-------:|------:|----------:|
+|   ResizeArrayOfArray |    921.8 ns |   1.39 ns |   1.30 ns | 0.9623 | 0.0534 |     - |   7.87 KB |
+| ImmutableListOfArray | 22,494.3 ns | 141.69 ns | 132.54 ns | 5.7373 | 1.0986 |     - |  46.92 KB |
+|    FSharpListOfArray |  9,403.1 ns |  54.43 ns |  50.91 ns | 3.8223 | 0.5417 |     - |  31.25 KB |
+|    FSharpxVecOfArray | 42,502.8 ns | 501.70 ns | 469.29 ns | 1.2207 | 0.0610 |     - |  10.26 KB |
+|           VecOfArray |  5,047.4 ns |  49.37 ns |  43.77 ns | 2.3346 | 0.1144 |     - |   19.1 KB |
 
 Note: since FSharpx implementation internally represents stored elements as `obj`, in case of value types there's an additional cost related to boxing.
 
@@ -391,11 +422,21 @@ do! actor.Terminated
 
 Current performance benchmarks as compared to F# MailboxProcessor - example of actor-based counter, processing 1 000 000 messages:
 
-|                    Method |      Mean |    Error |   StdDev | Ratio | RatioSD |       Gen 0 |     Gen 1 |     Gen 2 |    Allocated |
-|-------------------------- |----------:|---------:|---------:|------:|--------:|------------:|----------:|----------:|-------------:|
-|          FSharpAsyncActor | 279.71 ms | 2.855 ms | 2.384 ms |  1.00 |    0.00 | 154000.0000 | 2000.0000 | 2000.0000 | 477856.16 KB |
-|      FSharpActorUnbounded |  96.70 ms | 0.359 ms | 0.336 ms |  0.35 |    0.00 |           - |         - |         - |       2.6 KB |
-| FSharpActorUnboundedAsync |  99.19 ms | 1.976 ms | 4.460 ms |  0.35 |    0.02 |           - |         - |         - |    371.57 KB |
+```ini
+BenchmarkDotNet=v0.12.1, OS=Windows 10.0.19043
+AMD Ryzen 9 3950X, 1 CPU, 32 logical and 16 physical cores
+.NET Core SDK=5.0.301
+[Host]     : .NET Core 5.0.7 (CoreCLR 5.0.721.25508, CoreFX 5.0.721.25508), X64 RyuJIT DEBUG
+DefaultJob : .NET Core 5.0.7 (CoreCLR 5.0.721.25508, CoreFX 5.0.721.25508), X64 RyuJIT
+```
+
+|                  Method |      Mean |     Error |    StdDev | Ratio | RatioSD |      Gen 0 |     Gen 1 |     Gen 2 |    Allocated |
+|------------------------ |----------:|----------:|----------:|------:|--------:|-----------:|----------:|----------:|-------------:|
+|    MailboxProcessorPost | 243.63 ms |  4.840 ms | 10.209 ms |  1.00 |    0.00 | 58500.0000 | 2000.0000 | 1500.0000 | 477855.98 KB |
+|      UnboundedActorSend |  46.46 ms |  0.829 ms |  0.776 ms |  0.19 |    0.01 |          - |         - |         - |      1.03 KB |
+| UnboundedActorSendAsync |  64.40 ms |  2.205 ms |  6.502 ms |  0.27 |    0.03 |   285.7143 |  285.7143 |  285.7143 |   1408.84 KB |
+|      FSharpActorBounded | 686.02 ms | 13.542 ms | 12.005 ms |  2.79 |    0.13 | 36000.0000 |         - |         - | 296217.38 KB |
+
 
 
 * `FSharpAsyncActor` is F# `MailboxProcessor` implementation.
