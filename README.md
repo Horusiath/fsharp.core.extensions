@@ -190,15 +190,7 @@ let (ValueSome x) = a |> Vec.find (fun x -> x % 2 = 0)
 
 #### `Vec<'a>` benchmarks
 
-Belows are some of the benchmarks for this implementation, all of them are running on the same machine configuration:
-
-```ini
-BenchmarkDotNet=v0.12.0, OS=Windows 10.0.18362
-Intel Core i7-7660U CPU 2.50GHz (Kaby Lake), 1 CPU, 4 logical and 2 physical cores
-.NET Core SDK=3.0.100
-  [Host]     : .NET Core 3.0.0 (CoreCLR 4.700.19.46205, CoreFX 4.700.19.46214), X64 RyuJIT DEBUG
-  DefaultJob : .NET Core 3.0.0 (CoreCLR 4.700.19.46205, CoreFX 4.700.19.46214), X64 RyuJIT
-```
+Belows are some of the benchmarks for this implementation:
 
 #### Appending
 
