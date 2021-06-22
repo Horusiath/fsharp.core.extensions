@@ -325,6 +325,16 @@ let tests =
                 |> List.ofSeq
             Expect.containsAll actual [|2..41|] "result should contain necessary elements"
             
+        testCase "mapParallel should see all elements" <| fun _ ->
+            let actual =
+                [|1.. 40|]
+                |> AsyncSeq.ofSeq
+                |> AsyncSeq.mapParallel 4 (fun i -> vtask { return 1 })
+                |> AsyncSeq.fold (fun s i -> vtask { return s + i }) 0
+                |> eval
+
+            Expect.equal actual 40 "result should have seen all elements"
+
         testCase "repeat should be composable into range sequence" <| fun _ ->
             let actual =
                 AsyncSeq.repeat 1
