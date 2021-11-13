@@ -267,18 +267,21 @@ module AsyncSeq =
         let mutable remaining = parallelism
         let workers = Array.init parallelism (fun i -> unitTask {
             try
-                let mutable cont = not cancel.IsCancellationRequested
-                while cont do
+                let mutable contRead = not cancel.IsCancellationRequested
+                while contRead do
                     let ok, next = ireader.TryRead()
                     if ok then
                         let! o = map next
-                        let ok = owriter.TryWrite(o)
-                        if not ok then
-                            let! canWrite = owriter.WaitToWriteAsync(cancel)
-                            cont <- not cancel.IsCancellationRequested && canWrite
+                        let mutable contWrite = not cancel.IsCancellationRequested
+                        while contWrite do
+                            if owriter.TryWrite(o) then 
+                                contWrite <- false
+                            else
+                                let! canWrite = owriter.WaitToWriteAsync(cancel)
+                                contWrite <- not cancel.IsCancellationRequested && canWrite
                     else
                         let! canRead = ireader.WaitToReadAsync(cancel)
-                        cont <- not cancel.IsCancellationRequested && canRead
+                        contRead <- not cancel.IsCancellationRequested && canRead
                 if Interlocked.Decrement(&remaining) = 0 then
                     owriter.TryComplete() |> ignore
             with err ->
