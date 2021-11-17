@@ -148,9 +148,14 @@ let tests =
                 |> AsyncSeq.collect
                 |> eval
             
-            for i in actual do
-                Expect.isTrue (i % 2 <> 0) "choose should apply both mapping and filter"
-                
+            let expected =
+                input
+                |> Array.choose (fun e ->
+                    if e % 2 = 0 then Some (e+1)
+                    else None)
+
+            Expect.equal actual expected "AsyncSeq.choose should match Array.choose over same input and chooser"
+
         testProperty "filter should only pick correct elements" <| fun (input: int[]) ->
             let actual =
                 input
@@ -158,9 +163,10 @@ let tests =
                 |> AsyncSeq.filter (fun e -> e % 2 = 0)
                 |> AsyncSeq.collect
                 |> eval
-            
-            for i in actual do
-                Expect.isTrue (i % 2 = 0) "filter should not pass incorrect elements"
+
+            let expected = input |> Array.filter (fun e -> e % 2 = 0)
+
+            Expect.equal actual expected "AsyncSeq.filter should match Array.filter over same input and predicate"
                 
         testProperty "bind should execute all sub-sequences until completion" <| fun (input: int[][]) ->
             let actual =
