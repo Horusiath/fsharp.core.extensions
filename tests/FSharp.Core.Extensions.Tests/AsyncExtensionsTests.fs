@@ -116,7 +116,7 @@ type UserWithOrders =
       Orders: Order[] }
 
 [<Tests>]
-let tests = ftestList "DataLoader" [
+let tests = testList "DataLoader" [
     testAsync "should reuse once resolved values" {
         let ctx = DataLoader.context ()
         let mutable counter = 0
