@@ -223,7 +223,7 @@ type DataLoaderContext() =
         lock syncRoot (fun () -> next ())
 
 [<Sealed>]
-type DataLoader<'id, 'value when 'id: comparison>(sync: DataLoaderContext, fetchFn: Set<'id> -> Async<Map<'id, 'value>>) as this =
+type DataLoader<'id, 'value when 'id: comparison>(sync: DataLoaderContext, fetchFn: Set<'id> -> Async<Map<'id, 'value>>) =
     let syncRoot = obj()
     /// key-value pairs cached from previous calls to `fetchFn`
     let mutable cache: Map<'id, Async<'value>> = Map.empty

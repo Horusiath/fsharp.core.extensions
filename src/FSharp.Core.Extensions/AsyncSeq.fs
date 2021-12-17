@@ -403,6 +403,7 @@ module AsyncSeq =
                     member __.DisposeAsync() = inner.DisposeAsync()
                     member __.MoveNextAsync() = vtask {
                         let! hasNext = inner.MoveNextAsync()
+                        let mutable innerHasMore = hasNext
                         let mutable cont = hasNext
                         while cont do
                             let! result = f inner.Current
@@ -412,8 +413,9 @@ module AsyncSeq =
                                 cont <- false
                             | None ->
                                 let! hasNext = inner.MoveNextAsync()
+                                innerHasMore <- hasNext
                                 cont <- hasNext
-                        return cont && Option.isSome current      
+                        return innerHasMore      
                     } }}
     
     /// Returns an async sequence which filters out the input async sequence elements,
