@@ -455,11 +455,11 @@ and [<Sealed>] Vec<'a> internal(count: int, shift: int, root: VecNode<'a>, tail:
                     if i < this.Count then
                         if isNull array then array <- this.FindArrayForIndex(i)
                         else
-                            if i - offset = VecConst.capacity then
-                                array <- this.FindArrayForIndex(i)
+                            if i - offset = VecConst.capacity - 1 then
+                                array <- this.FindArrayForIndex(i + 1)
                                 offset <- offset + VecConst.capacity
                             index <- i + 1
-                        true
+                        index &&& VecConst.mask < array.Length
                     else false }
         member this.GetEnumerator(): System.Collections.IEnumerator =
             upcast (this :> IEnumerable<'a>).GetEnumerator()
