@@ -139,4 +139,15 @@ let tests =
             let v = Vec.init 10 id
             Expect.equal v.Count 10 "Vec.init should initialize with specified size"
 
+        testCase "should be able to enumerate collection of elements of length under 32" <| fun _ ->
+            let v = Vec.ofArray [|1..5|]
+            let actual = seq { for i in v do yield i} |> Seq.toArray
+            let expected = [|1..5|]
+            Expect.equal actual expected "Vec.IEnumerable should be able to enumerate collection of elements of length under 32"
+
+        testCase "should be able to enumerate collection of elements of length over 32" <| fun _ ->
+            let v = Vec.ofArray [|1..100|]
+            let actual = seq { for i in v do yield i} |> Seq.toArray
+            let expected = [|1..100|]
+            Expect.equal actual expected "Vec.IEnumerable should be able to enumerate collection of elements of length over 32"
     ]
